@@ -66,7 +66,9 @@ function makeFetch(window) {
   ok(w.eval(`staticPath('https://www.sec.gov/Archives/edgar/data/1067983/000095012325008361/index.json')`) === 'data/sec/edgar/1067983/000095012325008361/index.json', 'edgar index');
   ok(w.eval(`staticPath('https://efts.sec.gov/LATEST/search-index?q=&forms=4&dateRange=custom&startdt=2026-07-02&enddt=2026-07-07&from=20')`) === 'data/sec/form4-recent-20.json', 'form4 recent page');
   ok(w.eval(`staticPath('https://efts.sec.gov/LATEST/search-index?q=%22NVDA%22&forms=4&dateRange=custom&startdt=2026-04-08&enddt=2026-07-07&from=10')`) === 'data/sec/form4-NVDA-10.json', 'form4 per-ticker page');
-  ok(w.eval(`staticPath('https://finnhub.io/api/v1/stock/congressional-trading?symbol=NVDA&token=x')`) === null, 'finnhub never mapped to snapshot');
+  ok(w.eval(`staticPath('https://finnhub.io/api/v1/stock/congressional-trading?symbol=NVDA&token=x')`) === 'data/congress/NVDA.json', 'congress maps to server-side snapshot (token discarded)');
+  ok(w.eval(`staticPath('https://finnhub.io/api/v1/stock/congressional-trading?symbol=TSLA&token=')`) === 'data/congress/TSLA.json', 'keyless congress URL still maps');
+  ok(w.eval(`staticPath('https://finnhub.io/api/v1/quote?symbol=NVDA&token=x')`) === null, 'live quote endpoint never mapped (stays direct)');
 
   console.log('tab persistence across refresh:');
   w.eval(`document.querySelector('.tab[data-panel="insider"]').click()`);

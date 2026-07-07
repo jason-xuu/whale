@@ -237,8 +237,8 @@
 <!-- ============ CONGRESS ============ -->
 <section class="panel" id="panel-congress">
   <div class="controls card">
-    <label>Finnhub API key (free at finnhub.io/register)
-      <input id="cg-key" type="password" placeholder="paste key" style="width:220px" spellcheck="false">
+    <label>Finnhub API key <span class="dim">(optional on the hosted site — snapshots cover the default watchlist; a personal key adds live spots + custom tickers)</span>
+      <input id="cg-key" type="password" placeholder="paste key (optional here)" style="width:220px" spellcheck="false">
     </label>
     <label>Tickers
       <input id="cg-watchlist" style="width:280px" spellcheck="false">
@@ -318,6 +318,11 @@ function staticPath(url) {
     return `data/sec/form4-recent-${m[1]}.json`;
   if ((m = /^https:\/\/efts\.sec\.gov\/LATEST\/search-index\?q=%22([A-Z0-9.]+)%22&forms=4&dateRange=custom&startdt=[\d-]+&enddt=[\d-]+&from=(\d+)$/.exec(url)))
     return `data/sec/form4-${m[1]}-${m[2]}.json`;
+  /* congressional trades: snapshotted server-side with the Actions secret, so
+     visitors need no key. The token param (possibly empty) is discarded — the
+     request becomes a same-origin file fetch and no credential leaves the page. */
+  if ((m = /^https:\/\/finnhub\.io\/api\/v1\/stock\/congressional-trading\?symbol=([A-Z0-9.]+)&token=[^&]*$/.exec(url)))
+    return `data/congress/${m[1]}.json`;
   return null;
 }
 let RELAY_MODE = false;
@@ -340,7 +345,9 @@ async function fetchJSON(url, opts = {}) {
   if (LOCAL_SRV && opts.relay !== false) {
     return await fetchOnce('/proxy?url=' + encodeURIComponent(url), opts, opts.timeout || 45000);
   }
-  if (STATIC_HOST && opts.relay !== false) {
+  /* snapshot check runs even for relay:false requests — a same-origin file
+     fetch sends nothing to any third party (staticPath discards credentials) */
+  if (STATIC_HOST) {
     const p = staticPath(url);
     if (p) {
       try { return await fetchOnce(p, opts, opts.timeout || 30000); }
@@ -872,17 +879,26 @@ $('cg-watchlist').value = store.get('cg_watchlist', 'NVDA,AAPL,MSFT,TSLA,META');
 
 async function fetchCongress(silent) {
   const key = $('cg-key').value.trim();
-  if (!key) { setMsg('cg-msg', 'A free Finnhub API key is required — get one at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a>', 'err'); return; }
-  store.set('finnhub', key);
+  /* the hosted site serves congress from server-side snapshots — keyless;
+     local launcher / file:// still needs a personal key */
+  if (!key && !STATIC_HOST) { setMsg('cg-msg', 'A free Finnhub API key is required — get one at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a>', 'err'); return; }
+  if (key) store.set('finnhub', key);
   const tickers = [...new Set($('cg-watchlist').value.toUpperCase().split(/[,\s]+/).filter(Boolean))].slice(0, 10);
   store.set('cg_watchlist', tickers.join(','));
   const btn = $('cg-refresh');
   if (!silent) { btn.disabled = true; setMsg('cg-msg', ''); setLoading('cg-table', `Fetching congressional trades for ${tickers.length} tickers…`); }
   try {
+    /* per-ticker failures (ticker outside the snapshot set with no key, or a
+       transient API error) shouldn't kill the whole fetch */
+    const cgFails = []; let lastErr = null;
     const results = await pool(tickers, async t => {
-      const j = await fetchJSON(`https://finnhub.io/api/v1/stock/congressional-trading?symbol=${t}&token=${encodeURIComponent(key)}`, {relay: false});
-      return (j.data || []).map(x => ({...x, symbol: x.symbol || t}));
+      try {
+        const j = await fetchJSON(`https://finnhub.io/api/v1/stock/congressional-trading?symbol=${t}&token=${encodeURIComponent(key)}`, {relay: false});
+        return (j.data || []).map(x => ({...x, symbol: x.symbol || t}));
+      } catch (e) { cgFails.push(t); lastErr = e; return null; }
     }, 4);
+    if (cgFails.length === tickers.length && lastErr) throw lastErr;
+    if (cgFails.length && !silent) setMsg('cg-msg', `No congress data for: ${esc(cgFails.join(', '))}${key ? '' : ' (outside the snapshot set — add a personal key for custom tickers)'}`, 'info');
     const rows = results.flat().filter(Boolean).map(x => ({
       symbol: x.symbol, name: x.name || '—',
       type: x.transactionType || '—',
@@ -920,7 +936,7 @@ async function fetchCongress(silent) {
       $('cg-table').innerHTML = '<div class="loading">—</div>';
       const hint = /403/.test(e.message)
         ? ' — Finnhub moved congressional data to its paid tier (your key still powers real-time spot prices everywhere else). Confluence scores normalize without this source. Browse free: <a href="https://www.quiverquant.com/congresstrading/" target="_blank" rel="noopener">QuiverQuant</a>'
-        : /401/.test(e.message) ? ' — key invalid; re-check it at finnhub.io' : '';
+        : /401/.test(e.message) ? ($('cg-key').value.trim() ? ' — key invalid; re-check it at finnhub.io' : ' — no server snapshot for these tickers and no personal key entered') : '';
       setMsg('cg-msg', 'Failed: ' + esc(e.message) + hint, 'err');
     }
   }
@@ -946,7 +962,7 @@ function armAutoRefresh() {
       if (active === 'flow') await scanFlow(true);
       else if (active === 'conf') await window.runConfluence(true);
       else if (active === 'insider' && insState.all.length) await fetchInsiders(true);
-      else if (active === 'congress' && $('cg-key').value.trim() && cgState.loaded) await fetchCongress(true);
+      else if (active === 'congress' && cgState.loaded) await fetchCongress(true);
       /* 13F tab skipped — filings are quarterly, nothing changes intraday */
     } catch(e) {} finally { AR.busy = false; }
   }, mins * 60000);
@@ -1302,8 +1318,11 @@ async function runConfluence(silent) {
       iDone++; prog(`Step 3/4 — insider filings… ${iDone}/${tickers.length} tickers`);
     }, 3);
 
+    /* congress source is available with a personal key, or keylessly on the
+       hosted site via the server-side snapshots (data/congress/) */
+    const cgAvail = !!cgKey || STATIC_HOST;
     const cgByT = {};
-    if (cgKey) {
+    if (cgAvail) {
       let cDone = 0;
       await pool(tickers, async t => {
         cgByT[t] = await congressScan(t, days, cgKey).catch(() => null);
@@ -1319,7 +1338,7 @@ async function runConfluence(silent) {
                          sk: zScore(flowState.baseline, t, 'sk', chain.skew25),
                          gx: zScore(flowState.baseline, t, 'gx', chain.gex),
                          iv: zScore(flowState.baseline, t, 'iv', chain.frontATM)} : {};
-      const sc = scoreComponents({flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null, chain, z,
+      const sc = scoreComponents({flow: flowByT[t], ins: insByT[t], inst, cg: cgAvail ? cgByT[t] : null, chain, z,
                                   includeHedges: $('conf-hedges').checked});
       const label = sc.dir > 0.2 ? 'BULLISH' : sc.dir < -0.2 ? 'BEARISH' : 'MIXED';
       /* the whale's own contract supplies objective thesis parameters */
@@ -1380,7 +1399,7 @@ async function runConfluence(silent) {
               confidence: sc.confidence, agreeW: sc.agreeW, chain, z,
               dirLabel: label, dir: sc.dir, active: sc.active, thesis, odds, top1, rec,
               badge: sc.active >= 3 ? 'STRONG' : sc.active >= 2 ? 'CONFLUENCE' : '',
-              flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null,
+              flow: flowByT[t], ins: insByT[t], inst, cg: cgAvail ? cgByT[t] : null,
               flowS: sc.comps.flow.s, insS: sc.comps.ins.s,
               instS: sc.comps.inst ? sc.comps.inst.s : -1, cgS: sc.comps.cg ? sc.comps.cg.s : -1};
     });
@@ -1391,12 +1410,15 @@ async function runConfluence(silent) {
       <div class="stat"><div class="k">Tickers scanned</div><div class="v accent">${tickers.length}</div></div>
       <div class="stat"><div class="k">With confluence (2+ sources)</div><div class="v ${strong ? 'green' : ''}">${strong}</div></div>
       <div class="stat"><div class="k">Top score</div><div class="v">${top ? esc(top.ticker) + ' <span class="dim" style="font-size:13px">' + top.adjScore + '/100</span>' : '—'}</div></div>
-      <div class="stat"><div class="k">Coverage</div><div class="v" style="font-size:13px">Options + Insiders${f13 ? ' + 13F' : ''}${cgKey ? ' + Congress' : ''}</div></div>
+      <div class="stat"><div class="k">Coverage</div><div class="v" style="font-size:13px">Options + Insiders${f13 ? ' + 13F' : ''}${cgAvail && Object.values(cgByT).some(v => v) ? ' + Congress' : ''}</div></div>
       <div class="stat"><div class="k">Data freshness</div><div class="v" style="font-size:12px">${flowState.feedTime ? 'chains ' + esc(flowState.feedTime.slice(11, 16)) + ' UTC (CBOE 15-min delayed)' : 'chains —'}<br>${flowState.spotsLive ? `<span class="green">${flowState.spotsLive} live spots</span> (Finnhub real-time)` : '<span class="dim">spots delayed — add a Finnhub key (Congress tab) for real-time</span>'}</div></div>`;
     if (silent) setMsg('conf-msg', ''); /* clear the progress strip */
-    if (!f13 || !cgKey) setMsg('conf-msg',
+    const cgLive = cgAvail && Object.values(cgByT).some(v => v);
+    if (!f13 || !cgLive) setMsg('conf-msg',
       (!f13 ? '13F scan disabled — institutions excluded from scores. ' : '') +
-      (!cgKey ? 'No Finnhub key — congress excluded from scores (add one in the Congress tab).' : ''), 'info');
+      (!cgLive ? (cgAvail
+        ? 'Congress source returned no data this scan — scores normalized without it.'
+        : 'Congress excluded — add a free Finnhub key in the Congress tab (the hosted site usually serves it keylessly from snapshots).') : ''), 'info');
     renderConfluence();
     resolveDue(); /* grade any theses whose deadline has passed */
   } catch (e) {

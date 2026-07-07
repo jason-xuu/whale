@@ -48,6 +48,9 @@ jobs:
           # the frequent market-hours crons only refresh CBOE + latest Form 4s
           MODE: ${{ (github.event_name == 'schedule' && github.event.schedule != '41 11 * * 1-5') && 'cboe' || 'full' }}
           SITE_BASE: https://jason-xuu.github.io/whale
+          # encrypted secret: used server-side to snapshot public congressional
+          # disclosures into data/congress/ — the key itself is never published
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
         run: node scripts/build-data.mjs
 
       - uses: actions/configure-pages@v5

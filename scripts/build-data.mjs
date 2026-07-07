@@ -58,7 +58,7 @@ async function fetchBody(url, {timeout = 60000, retries = 3} = {}) {
       return Buffer.from(await r.arrayBuffer());
     } catch (e) {
       if (i >= retries) throw e;
-      if (/HTTP 429/.test(e.message)) { console.error(`  429 on ${url} — backing off ${30 * (i + 1)}s`); await sleep(30000 * (i + 1)); }
+      if (/HTTP 429/.test(e.message)) { console.error(`  429 on ${url.replace(/token=[^&]+/, 'token=***')} — backing off ${30 * (i + 1)}s`); await sleep(30000 * (i + 1)); }
       else if (/HTTP 5\d\d/.test(e.message)) await sleep(3000 * (i + 1)); // efts throws transient 500s
       else await sleep(800 * (i + 1));
     } finally { clearTimeout(t); }
@@ -198,6 +198,25 @@ async function build13F() {
   await mirror('https://www.sec.gov/files/company_tickers.json', 'sec/company_tickers.json');
 }
 
+/* ---------- congress trades via Finnhub secret (every run) ----------
+   The key lives only in the Actions secret; what gets published is the
+   DATA (public congressional disclosures), served same-origin so every
+   visitor gets the congress source with no key of their own. */
+async function buildCongress() {
+  const key = process.env.FINNHUB_KEY;
+  if (!key) { console.log('Congress: no FINNHUB_KEY in env — skipped'); return; }
+  console.log(`Congress: ${WATCHLIST.length} tickers via Finnhub`);
+  let got = 0;
+  await pool(WATCHLIST, async t => {
+    try {
+      const b = await fetchBody(`https://finnhub.io/api/v1/stock/congressional-trading?symbol=${t}&token=${encodeURIComponent(key)}`, {timeout: 20000, retries: 1});
+      JSON.parse(b); /* refuse to publish non-JSON */
+      await save(`congress/${t}.json`, b); got++;
+    } catch (e) { console.error(`  congress ${t}: ${e.message.replace(/token=[^&]+/, 'token=***')}`); }
+  }, 2);
+  console.log(`Congress: ${got}/${WATCHLIST.length} snapshots`);
+}
+
 /* ---------- reuse SEC mirror from the live site (cboe mode) ---------- */
 async function reuseSec() {
   try {
@@ -248,8 +267,9 @@ if (MODE === 'cboe') {
     console.log('Running full build instead');
     await buildCboe(); await buildForm4Recent(); await buildInsiderScans(); await build13F();
   }
+  await buildCongress();
 } else {
-  await buildCboe(); await buildForm4Recent(); await buildInsiderScans(); await build13F();
+  await buildCboe(); await buildForm4Recent(); await buildInsiderScans(); await build13F(); await buildCongress();
 }
 
 await save('sec/manifest.json', JSON.stringify({files: [...written].filter(f => f !== 'sec/manifest.json').sort()}));
