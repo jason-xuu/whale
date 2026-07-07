@@ -46,7 +46,7 @@ async function secGate() {
   secNext = at + 250; // ≤4 req/s
   if (at > now) await sleep(at - now);
 }
-async function fetchBody(url, {timeout = 60000, retries = 2} = {}) {
+async function fetchBody(url, {timeout = 60000, retries = 3} = {}) {
   const isSec = /\.sec\.gov\//.test(url);
   for (let i = 0; ; i++) {
     if (isSec) await secGate();
@@ -59,8 +59,22 @@ async function fetchBody(url, {timeout = 60000, retries = 2} = {}) {
     } catch (e) {
       if (i >= retries) throw e;
       if (/HTTP 429/.test(e.message)) { console.error(`  429 on ${url} — backing off ${30 * (i + 1)}s`); await sleep(30000 * (i + 1)); }
+      else if (/HTTP 5\d\d/.test(e.message)) await sleep(3000 * (i + 1)); // efts throws transient 500s
       else await sleep(800 * (i + 1));
     } finally { clearTimeout(t); }
+  }
+}
+/* Last resort for a failed fetch: copy the previous deploy's version of this
+   file from the live site, so one flaky SEC response never ships a 404 hole. */
+async function saveOrSalvage(url, rel, opts) {
+  try { const b = await fetchBody(url, opts); await save(rel, b); return b; }
+  catch (e) {
+    try {
+      const b = await fetchBody(`${SITE_BASE}/data/${rel}`, {retries: 1, timeout: 60000});
+      await save(rel, b);
+      console.error(`  SALVAGED ${rel} from previous deploy (${e.message})`);
+      return b;
+    } catch (e2) { failures++; console.error(`  FAIL ${rel}: ${e.message}`); return null; }
   }
 }
 async function save(rel, buf) {
@@ -103,10 +117,12 @@ function filingsFromPages(pages) {
       const s = h._source;
       if (seen.has(s.adsh)) continue;
       seen.add(s.adsh);
-      out.push({adsh: s.adsh, cik: s.ciks[s.ciks.length - 1], docId: (h._id.split(':')[1] || '')});
+      out.push({adsh: s.adsh, cik: s.ciks[s.ciks.length - 1], fileDate: s.file_date || '', docId: (h._id.split(':')[1] || '')});
     }
   }
-  return out;
+  // newest first — the dashboard sorts by fileDate and parses from the top,
+  // so mirror coverage must follow date order, not page order
+  return out.sort((a, b) => b.fileDate.localeCompare(a.fileDate));
 }
 async function mirrorFiling(f) {
   const cikN = parseInt(f.cik, 10), acc = f.adsh.replace(/-/g, '');
@@ -122,7 +138,7 @@ async function mirrorFiling(f) {
     try {
       const idx = JSON.parse(await readFile(join(OUT, `${base}/index.json`), 'utf8'));
       const x = (idx.directory.item || []).find(i => /\.xml$/i.test(i.name));
-      if (x) await mirror(`${dir}/${x.name}`, `${base}/${x.name}`);
+      if (x && !written.has(`${base}/${x.name}`)) await mirror(`${dir}/${x.name}`, `${base}/${x.name}`);
     } catch (e) { failures++; }
   }
 }
@@ -131,8 +147,7 @@ async function buildForm4Recent() {
   const pages = [];
   await pool(Array.from({length: 15}, (_, i) => i * 10), async from => {
     const url = `https://efts.sec.gov/LATEST/search-index?q=&forms=4&dateRange=custom&startdt=${d(day5)}&enddt=${d(today)}&from=${from}`;
-    try { const b = await fetchBody(url); await save(`sec/form4-recent-${from}.json`, b); pages[from / 10] = b; }
-    catch (e) { failures++; console.error(`  FAIL form4-recent-${from}: ${e.message}`); }
+    pages[from / 10] = await saveOrSalvage(url, `sec/form4-recent-${from}.json`);
   }, 4);
   await pool(filingsFromPages(pages).slice(0, 150), mirrorFiling, 4);
 }
@@ -144,15 +159,13 @@ async function buildInsiderScans() {
   const byTicker = {};
   await pool(jobs, async ({t, from}) => {
     const url = `https://efts.sec.gov/LATEST/search-index?q=%22${t}%22&forms=4&dateRange=custom&startdt=${d(day90)}&enddt=${d(today)}&from=${from}`;
-    try {
-      const b = await fetchBody(url);
-      await save(`sec/form4-${t}-${from}.json`, b);
-      (byTicker[t] = byTicker[t] || []).push(b);
-    } catch (e) { failures++; console.error(`  FAIL form4-${t}-${from}: ${e.message}`); }
+    const b = await saveOrSalvage(url, `sec/form4-${t}-${from}.json`);
+    if (b) (byTicker[t] = byTicker[t] || []).push(b);
   }, 4);
-  // mirror the filings the dashboard will parse (it takes the 8 most recent per ticker)
+  // mirror every filing the pages reference — the dashboard parses the 8 most
+  // recent per ticker, but "most recent" spans both pages, so partial mirrors miss
   const filings = [];
-  for (const t of Object.keys(byTicker)) filings.push(...filingsFromPages(byTicker[t]).slice(0, 10));
+  for (const t of Object.keys(byTicker)) filings.push(...filingsFromPages(byTicker[t]));
   await pool(filings, mirrorFiling, 4);
 }
 
@@ -188,18 +201,35 @@ async function build13F() {
 /* ---------- reuse SEC mirror from the live site (cboe mode) ---------- */
 async function reuseSec() {
   try {
-    const meta = JSON.parse(await fetchBody(`${SITE_BASE}/data/meta.json`, {retries: 0, timeout: 20000}));
-    if (!meta.secBuiltAt || Date.now() - new Date(meta.secBuiltAt).getTime() > 26 * 3600e3) return false;
-    const manifest = JSON.parse(await fetchBody(`${SITE_BASE}/data/sec/manifest.json`, {retries: 0, timeout: 20000}));
-    console.log(`Reusing ${manifest.files.length} SEC files from live site (secBuiltAt ${meta.secBuiltAt})`);
-    let miss = 0;
-    await pool(manifest.files, async rel => {
+    const meta = JSON.parse(await fetchBody(`${SITE_BASE}/data/meta.json`, {retries: 1, timeout: 20000}));
+    if (!meta.secBuiltAt || Date.now() - new Date(meta.secBuiltAt).getTime() > 26 * 3600e3) {
+      console.log(`Live SEC mirror stale (secBuiltAt ${meta.secBuiltAt})`);
+      return false;
+    }
+    const manifest = JSON.parse(await fetchBody(`${SITE_BASE}/data/sec/manifest.json`, {retries: 1, timeout: 20000}));
+    // form4-* list pages are rebuilt fresh every run — don't bother copying them
+    const files = manifest.files.filter(f => !/^sec\/form4-/.test(f));
+    console.log(`Reusing ${files.length} SEC files from live site (secBuiltAt ${meta.secBuiltAt})`);
+    const missed = [];
+    await pool(files, async rel => {
       try { await save(rel, await fetchBody(`${SITE_BASE}/data/${rel}`, {retries: 1, timeout: 60000})); }
-      catch (e) { miss++; }
+      catch (e) { missed.push(rel); }
     }, 8);
-    if (miss > manifest.files.length / 4) return false; // live copy too broken — rebuild
-    return meta.secBuiltAt;
-  } catch (e) { return false; }
+    if (missed.length > files.length / 4) { console.log(`Reuse too broken (${missed.length} misses)`); return false; }
+    return {secBuiltAt: meta.secBuiltAt, missed};
+  } catch (e) { console.log(`Reuse unavailable: ${e.message}`); return false; }
+}
+
+/* Holes appear when a build hits a transient SEC failure; reconstruct the
+   origin URL from the mirror path and refetch instead of carrying the hole. */
+async function healMisses(missed) {
+  for (const rel of missed) {
+    let m, url = null;
+    if (rel === 'sec/company_tickers.json') url = 'https://www.sec.gov/files/company_tickers.json';
+    else if ((m = /^sec\/submissions\/(CIK\d{10}\.json)$/.exec(rel))) url = `https://data.sec.gov/submissions/${m[1]}`;
+    else if ((m = /^sec\/edgar\/(\d+)\/(\d+)\/([\w.-]+)$/.exec(rel))) url = `https://www.sec.gov/Archives/edgar/data/${m[1]}/${m[2]}/${m[3]}`;
+    if (url) { console.log(`  healing ${rel}`); await mirror(url, rel, {timeout: 120000}); }
+  }
 }
 
 /* ---------- main ---------- */
@@ -207,11 +237,15 @@ let secBuiltAt = new Date().toISOString();
 if (MODE === 'cboe') {
   const reused = await reuseSec();
   if (reused) {
-    secBuiltAt = reused;
+    secBuiltAt = reused.secBuiltAt;
     await buildCboe();
-    await buildForm4Recent(); // fresh filings keep streaming in intraday
+    // Form 4 data streams in all day — always rebuild it fresh. The reused
+    // mirror makes this cheap: already-mirrored filing XMLs are skipped.
+    await buildForm4Recent();
+    await buildInsiderScans();
+    await healMisses(reused.missed);
   } else {
-    console.log('Live SEC mirror unavailable/stale — running full build');
+    console.log('Running full build instead');
     await buildCboe(); await buildForm4Recent(); await buildInsiderScans(); await build13F();
   }
 } else {
