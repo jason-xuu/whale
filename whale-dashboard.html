@@ -50,6 +50,7 @@
   .tag.put,.tag.sell{background:rgba(255,89,100,.15);color:var(--red)}
   .tag.other{background:rgba(125,138,165,.15);color:var(--dim)}
   .green{color:var(--green)} .red{color:var(--red)} .dim{color:var(--dim)} .amber{color:var(--amber)}
+  tr.hot td{background:rgba(46,204,113,.06)} tr.hot td:first-child{box-shadow:inset 2px 0 0 var(--green)}
   a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
   .msg{padding:12px 14px;border-radius:8px;margin-bottom:12px;font-size:13px}
   .msg.err{background:rgba(255,89,100,.1);border:1px solid rgba(255,89,100,.35);color:#ffb3b8}
@@ -361,18 +362,32 @@ function sortable(tableEl, rows, renderRow, cols, state) {
 const setMsg = (id, html, cls) => { $(id).innerHTML = html ? `<div class="msg ${cls || 'info'}">${html}</div>` : ''; };
 const setLoading = (id, txt) => { $(id).innerHTML = `<div class="loading"><span class="spinner"></span>${txt}</div>`; };
 
-/* tabs */
+/* tabs — remember the active tab so a refresh puts you back where you were */
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
   t.classList.add('active'); $('panel-' + t.dataset.panel).classList.add('active');
+  store.set('tab', t.dataset.panel);
 });
+{
+  const saved = store.get('tab', 'flow');
+  const t = document.querySelector(`.tab[data-panel="${saved}"]`);
+  if (t && !t.classList.contains('active')) {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+    t.classList.add('active'); $('panel-' + saved).classList.add('active');
+  }
+}
 $('clock').textContent = new Date().toLocaleString();
 </script>
 <script>
 /* ================= OPTIONS FLOW (CBOE delayed) ================= */
 const INDEX_MAP = {SPX:'_SPX', VIX:'_VIX', RUT:'_RUT', DJX:'_DJX', XSP:'_XSP', NDX:'_NDX'};
-const flowState = {rows: [], sort: {key: 'notional', dir: -1}};
+/* default sort 'smart': fresh out-of-the-money bets first (calls, then puts),
+   ITM and stale prints below — still shown, just lower. Click any column
+   header to re-sort; hit Scan to come back to smart order. */
+const flowState = {rows: [], sort: {key: 'smart', dir: 1}};
+const RECENT_MS = 2 * 3600e3; // "recent" = traded within 2h of the newest print in the scan
 $('flow-watchlist').value = store.get('watchlist', 'SPY,QQQ,NVDA,TSLA,AAPL,MSFT,META,AMD');
 
 function parseOptionSymbol(sym) {
@@ -421,6 +436,23 @@ async function scanFlow(silent) {
   let rows = results.flat().filter(r =>
     r.vol >= minVol && r.notional >= minNotional && r.volOI >= minVolOI &&
     (side === 'all' || r.type === side));
+  /* tier for the smart sort: 0 = recent OTM call, 1 = recent OTM put,
+     2 = everything else (ITM or stale). Encoded so one ascending numeric
+     sort yields tier order with notional descending inside each tier.
+     "Recent" is measured against the newest print in this scan, not the feed
+     timestamp — CBOE's timestamp is UTC while last_trade_time is ET, and
+     anchoring to the latest trade also does the right thing after hours. */
+  let maxLtt = 0;
+  rows.forEach(r => {
+    r._ltt = r.lastTrade ? new Date(r.lastTrade.replace(' ', 'T')).getTime() || 0 : 0;
+    if (r._ltt > maxLtt) maxLtt = r._ltt;
+  });
+  rows.forEach(r => {
+    r.recent = r._ltt > 0 && maxLtt - r._ltt <= RECENT_MS;
+    r.tier = (r.otm && r.recent) ? (r.type === 'C' ? 0 : 1) : 2;
+    r.smart = r.tier * 1e13 - r.notional;
+  });
+  flowState.sort = {key: 'smart', dir: 1};
   flowState.rows = rows;
   const callPrem = rows.filter(r => r.type === 'C').reduce((s, r) => s + r.notional, 0);
   const putPrem = rows.filter(r => r.type === 'P').reduce((s, r) => s + r.notional, 0);
@@ -452,8 +484,9 @@ async function scanFlow(silent) {
 }
 function renderFlow() {
   if (!flowState.rows.length) { $('flow-table').innerHTML = '<div class="loading">No contracts match the filters — try lowering min notional or Vol/OI</div>'; return; }
+  const nHot = flowState.rows.filter(r => r.tier < 2).length;
   sortable($('flow-table'), flowState.rows, r => `
-    <tr>
+    <tr class="${r.tier < 2 && flowState.sort.key === 'smart' ? 'hot' : ''}">
       <td class="l"><b>${esc(r.ticker)}</b></td>
       <td class="l"><span class="tag ${r.type === 'C' ? 'call' : 'put'}">${r.type === 'C' ? 'CALL' : 'PUT'}</span></td>
       <td>${r.strike}</td>
@@ -465,13 +498,19 @@ function renderFlow() {
       <td><b class="${r.type === 'C' ? 'green' : 'red'}">${fmt$(r.notional)}</b></td>
       <td>${(r.iv * 100).toFixed(0)}%</td>
       <td>${r.delta.toFixed(2)}</td>
+      <td class="l">${r.recent ? '<span class="green">●</span> ' : ''}<span class="dim">${r.lastTrade ? esc(r.lastTrade.replace('T', ' ').slice(11, 16)) : '—'}</span></td>
       <td class="l dim">${r.otm == null ? '—' : r.otm ? 'OTM' : 'ITM'}</td>
     </tr>`,
     [{key:'ticker',label:'Ticker',left:1},{key:'type',label:'Side',left:1},{key:'strike',label:'Strike'},
      {key:'exp',label:'Expiry',left:1},{key:'price',label:'Price'},{key:'vol',label:'Volume'},
      {key:'oi',label:'OI'},{key:'volOI',label:'Vol/OI'},{key:'notional',label:'Notional'},
-     {key:'iv',label:'IV'},{key:'delta',label:'Delta'},{key:'otm',label:'Money',left:1}],
+     {key:'iv',label:'IV'},{key:'delta',label:'Delta'},{key:'lastTrade',label:'Last Trade',left:1},
+     {key:'otm',label:'Money',left:1}],
     flowState.sort);
+  if (flowState.sort.key === 'smart') {
+    $('flow-table').insertAdjacentHTML('afterbegin',
+      `<div class="dim" style="font-size:12px;margin:0 0 6px 2px">Smart sort: ${nHot} recent OTM bets (traded within 2h of the newest print, highlighted) ranked first — calls, then puts, then ITM/stale by notional. Click any column to re-sort.</div>`);
+  }
 }
 $('flow-refresh').onclick = () => scanFlow();
 ['flow-minvol','flow-minnotional','flow-minvoloi','flow-side'].forEach(id => $(id).onchange = () => { if (flowState.rows.length) scanFlow(); });
