@@ -119,3 +119,4 @@ for (const a of rows) {
   filed++;
 }
 console.log(`done: ${filed} filed, ${skipped} already open, ${closed} expired closed`);
+process.exit(0); /* the dashboard's auto-refresh setInterval would otherwise keep node alive */
