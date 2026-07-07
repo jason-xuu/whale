@@ -13,6 +13,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*a, directory=os.getcwd(), **kw)
 
     def do_GET(self):
+        # Browsers abort in-flight requests all the time (tab close, refresh,
+        # navigation) — a half-written response is normal, not an error.
+        try:
+            self._get()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _get(self):
         if not self.path.startswith('/proxy?'):
             return super().do_GET()
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)

@@ -1,0 +1,58 @@
+name: Deploy Pages with data snapshots
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # every 15 min through US market hours (13:30-20:00 UTC covers ET in both DST states)
+    - cron: '3/15 13-21 * * 1-5'
+    # after-close final snapshot
+    - cron: '23 22 * * 1-5'
+    # pre-market full SEC refresh (13F mirrors, per-ticker insider scans)
+    - cron: '41 11 * * 1-5'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp index.html whale-dashboard.html README.md CLAUDE.md "Start Whale Tracker.command" _site/
+          touch _site/.nojekyll
+
+      - name: Fetch data snapshots
+        env:
+          # the daily 11:41 cron and any push/manual run do a full SEC refresh;
+          # the frequent market-hours crons only refresh CBOE + latest Form 4s
+          MODE: ${{ (github.event_name == 'schedule' && github.event.schedule != '41 11 * * 1-5') && 'cboe' || 'full' }}
+          SITE_BASE: https://jason-xuu.github.io/whale
+        run: node scripts/build-data.mjs
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

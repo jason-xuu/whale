@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐋</text></svg>">
 <title>Whale Tracker — Options Flow · 13F · Insiders · Congress</title>
 <style>
   :root{
@@ -258,6 +259,26 @@ const store = {
    retry through public CORS relays. Only public market data goes through
    relays — requests carrying API keys set relay:false and never do. */
 const LOCAL_SRV = location.protocol.startsWith('http') && ['127.0.0.1', 'localhost'].includes(location.hostname);
+/* Static hosting (e.g. GitHub Pages): a scheduled workflow mirrors the data
+   this dashboard needs into ./data/ — same-origin, so no CORS and no relays.
+   staticPath() maps a live API URL to its snapshot; on a miss (custom ticker,
+   custom CIK) we fall through to direct fetch + relay as before. */
+const STATIC_HOST = location.protocol.startsWith('http') && !LOCAL_SRV;
+function staticPath(url) {
+  let m;
+  if ((m = /^https:\/\/cdn\.cboe\.com\/api\/global\/delayed_quotes\/(options|quotes)\/(_?[A-Z0-9]+)\.json$/.exec(url)))
+    return `data/cboe/${m[1]}/${m[2]}.json`;
+  if (url === 'https://www.sec.gov/files/company_tickers.json') return 'data/sec/company_tickers.json';
+  if ((m = /^https:\/\/data\.sec\.gov\/submissions\/(CIK\d{10})\.json$/.exec(url)))
+    return `data/sec/submissions/${m[1]}.json`;
+  if ((m = /^https:\/\/www\.sec\.gov\/Archives\/edgar\/data\/(\d+)\/([\w-]+)\/([\w.-]+)$/.exec(url)))
+    return `data/sec/edgar/${m[1]}/${m[2]}/${m[3]}`;
+  if ((m = /^https:\/\/efts\.sec\.gov\/LATEST\/search-index\?q=&forms=4&dateRange=custom&startdt=[\d-]+&enddt=[\d-]+&from=(\d+)$/.exec(url)))
+    return `data/sec/form4-recent-${m[1]}.json`;
+  if ((m = /^https:\/\/efts\.sec\.gov\/LATEST\/search-index\?q=%22([A-Z0-9.]+)%22&forms=4&dateRange=custom&startdt=[\d-]+&enddt=[\d-]+&from=(\d+)$/.exec(url)))
+    return `data/sec/form4-${m[1]}-${m[2]}.json`;
+  return null;
+}
 let RELAY_MODE = false;
 const RELAYS = [
   u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
@@ -277,6 +298,13 @@ async function fetchJSON(url, opts = {}) {
      API-key requests (relay:false) always go direct and never touch the proxy. */
   if (LOCAL_SRV && opts.relay !== false) {
     return await fetchOnce('/proxy?url=' + encodeURIComponent(url), opts, opts.timeout || 45000);
+  }
+  if (STATIC_HOST && opts.relay !== false) {
+    const p = staticPath(url);
+    if (p) {
+      try { return await fetchOnce(p, opts, opts.timeout || 30000); }
+      catch (e) { /* not in the snapshot — fall through to direct/relay */ }
+    }
   }
   try {
     return await fetchOnce(url, opts, opts.timeout || 30000);

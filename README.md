@@ -8,7 +8,9 @@ Free, self-hosted whale-tracking dashboard: options flow (CBOE), 13F institution
 
 ### 1. GitHub Pages (zero install)
 
-Open the live link above. The dashboard fetches public market data directly from the browser; where a source blocks cross-origin requests (CBOE, some SEC endpoints), it automatically falls back to public CORS relays. Slower and occasionally flaky — a banner appears when relay mode kicks in.
+Open the live link above. A scheduled GitHub Actions workflow (`.github/workflows/pages.yml`) snapshots CBOE option chains, SEC 13F filings, and Form 4 data into `data/` and redeploys the site every 15 minutes during US market hours — so the dashboard reads everything same-origin with no CORS proxies at all. CBOE data is 15-minute delayed at the source, so the snapshot cadence matches the data's own resolution.
+
+Covered by snapshots: the default watchlist (`scripts/watchlist.json`), the 12 tracked funds' 13Fs, recent Form 4 filings, and per-ticker insider scans. Tickers or CIKs outside the snapshot fall back to direct fetch + public CORS relays, which usually fail for large payloads — use the local launcher for arbitrary symbols.
 
 ### 2. Local launcher (recommended — fastest, most reliable)
 
@@ -19,6 +21,8 @@ Download/clone this repo, then double-click **`Start Whale Tracker.command`** (m
 - `whale-dashboard.html` — the entire app. One self-contained HTML file: 1 CSS block + 5 script blocks (shared helpers/fetch routing · options flow · EDGAR 13F + Form 4 · congress + auto-refresh · confluence engine + thesis ledger).
 - `index.html` — redirect to the dashboard so GitHub Pages serves it at the repo root.
 - `Start Whale Tracker.command` — macOS local server/proxy launcher.
+- `scripts/build-data.mjs` + `scripts/watchlist.json` — data snapshot builder run by the Pages workflow (SEC-fair-access rate-limited; reuses the previous SEC mirror between daily refreshes).
+- `.github/workflows/pages.yml` — builds snapshots and deploys the site as a Pages artifact (no data commits, no repo bloat).
 
 ## Data sources
 
