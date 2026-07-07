@@ -168,7 +168,9 @@
     CONFLUENCE badge = 2+ sources active on a ticker, STRONG = 3+.
     <br><br>
     <b>Theses &amp; ledger</b>: each directional row becomes a falsifiable claim — outperform/underperform SPY over a fixed horizon (14d default, 21d for strong confluence, 30d when insiders dominate, since insider alpha is slower), with an objective invalidation level taken from the whale's own strike when available. "Log theses" snapshots entry prices; after each deadline the dashboard grades itself against real prices and shows its cumulative hit rate and average excess return — including losses. <b>Market odds</b> lines are risk-neutral probabilities implied by the whale contract's own IV (Black-Scholes N(d₂)) — what the options market itself believes, as a reality check on the signal.
-    <b>Recommended move</b> lines are derived entirely from the scan: direction from the confluence verdict, the specific contract from the largest whale print aligned with it (OTM with ≥1 week to expiry preferred), cost/breakeven/odds from that contract's own price and IV, and the exit from the thesis invalidation level and deadline. When no aligned option print exists, the fallback is a share position; when signals are mixed or weak, the recommendation is to stand aside.
+    <b>Microstructure.</b> Flow direction is read the way a desk reads it, not by assuming every call is bullish: trades at the ask are classified buyer-initiated and at the bid seller-initiated; the tape's net delta-adjusted dollar flow is computed across the whole chain; dealer gamma exposure (Black-Scholes gamma from each contract's own IV × open interest) flags pinning vs amplification regimes; 25Δ skew and IV term structure enter the cross-exam. Each ticker also builds a private baseline of these metrics from your own scans (stored locally, one point per day) — after 5 scan-days, today's readings get z-scores against that history, because "unusual" only means something relative to a name's own normal.
+    <b>Confidence.</b> Every verdict carries a HIGH/MEDIUM/LOW confidence tier from source count, score-weighted directional agreement, evidence level, and how much the cross-exam took back. Insider buys are conviction-weighted (C-suite buys and ≥3-buyer clusters count extra); 13F positions are weighted by their share of each fund's book, not just dollars.
+    <b>Recommended move</b> lines are derived entirely from the scan: direction from the verdict; the contract by execution-quality scoring of aligned whale prints (horizon coverage, delta band, bid/ask spread, open interest, aggressor side — a print the whale <i>sold</i> is never mirrored, and if every aligned print traded at the bid the engine says so and routes to shares); cost/breakeven from the contract itself; the <b>edge test</b> compares the market's implied past-breakeven odds against this ledger's own graded hit rate — once ≥10 theses are graded, positive edge produces a half-Kelly risk budget (capped 5%), and no edge says so plainly. Rich front IV triggers a debit-spread alternative priced from real legs in the same chain. When signals are mixed or weak, the recommendation is to stand aside.
     The scan runs automatically when this tab opens and re-runs on the auto-refresh interval while it stays open.
     Data lags still apply (13F quarterly, congress up to 45d). This is a research instrument, not trade advice — judge it by its ledger, and verify filings via the links in each tab.
   </div>
@@ -259,6 +261,33 @@ const store = {
   get(k, d){ try { const v = localStorage.getItem('wt_' + k); return v == null ? d : v; } catch(e){ return d; } },
   set(k, v){ try { localStorage.setItem('wt_' + k, v); } catch(e){} }
 };
+
+/* Per-ticker statistical baselines, self-built from this browser's own scans
+   (one record per calendar day, last 60 kept). "Unusual" only means something
+   relative to a ticker's own history — SPY trades billions in premium every
+   day; the same number in a mid-cap is a siren. */
+function updateBaselines(chain) {
+  let hist; try { hist = JSON.parse(localStorage.getItem('wt_baseline') || '{}'); } catch(e) { hist = {}; }
+  const today = new Date().toISOString().slice(0, 10);
+  for (const [t, cs] of Object.entries(chain || {})) {
+    const arr = hist[t] = hist[t] || [];
+    const rec = {d: today, nd: cs.netDelta, pc: cs.callPrem > 0 ? cs.putPrem / cs.callPrem : null,
+                 sk: cs.skew25, gx: cs.gex, iv: cs.frontATM};
+    const i = arr.findIndex(x => x.d === today);
+    if (i >= 0) arr[i] = rec; else arr.push(rec);
+    if (arr.length > 60) arr.splice(0, arr.length - 60);
+  }
+  try { localStorage.setItem('wt_baseline', JSON.stringify(hist)); } catch(e) {}
+  return hist;
+}
+function zScore(hist, t, field, value) {
+  const today = new Date().toISOString().slice(0, 10);
+  const past = (((hist || {})[t]) || []).filter(x => x.d !== today && x[field] != null && isFinite(x[field])).map(x => x[field]);
+  if (past.length < 5 || value == null || !isFinite(value)) return null; /* needs ≥5 prior days */
+  const m = past.reduce((a, b) => a + b, 0) / past.length;
+  const sd = Math.sqrt(past.reduce((a, b) => a + (b - m) ** 2, 0) / past.length);
+  return sd > 1e-9 ? (value - m) / sd : null;
+}
 /* Direct fetch first; if the browser blocks it (CORS / local-file security),
    retry through public CORS relays. Only public market data goes through
    relays — requests carrying API keys set relay:false and never do. */
@@ -411,27 +440,80 @@ async function scanFlow(silent) {
   const side = $('flow-side').value;
   const fails = [];
   let feedTime = '';
+  const chainStats = {};
   const results = await pool(tickers, async t => {
     const cboeSym = INDEX_MAP[t] || t;
     try {
       const j = await fetchJSON(`https://cdn.cboe.com/api/global/delayed_quotes/options/${cboeSym}.json`);
       feedTime = j.timestamp || feedTime;
       const spot = j.data.current_price ?? j.data.close ?? j.data.prev_day_close ?? null;
-      return (j.data.options || []).map(o => {
-        const p = parseOptionSymbol(o.option); if (!p) return null;
+      /* whole-tape microstructure for this ticker, accumulated in the same pass
+         that extracts whale prints. All of it derives from the chain itself. */
+      const cs = {spot, netDelta: 0, absDelta: 0, callPrem: 0, putPrem: 0,
+                  signedPrem: 0, classPrem: 0, gex: 0, expIV: {}, legs: []};
+      const out = [];
+      for (const o of (j.data.options || [])) {
+        const p = parseOptionSymbol(o.option); if (!p) continue;
         const vol = o.volume || 0;
-        const price = o.last_trade_price || (o.bid && o.ask ? (o.bid + o.ask) / 2 : 0);
+        const bid = o.bid || 0, ask = o.ask || 0;
+        const mid = bid && ask ? (bid + ask) / 2 : 0;
+        const price = o.last_trade_price || mid;
         const notional = vol * price * 100;
         const oi = o.open_interest || 0;
-        const volOI = oi > 0 ? vol / oi : (vol > 0 ? 999 : 0);
+        const iv = o.iv || 0;
+        /* enforce sign convention: calls +Δ, puts −Δ (defensive vs feed quirks) */
+        const delta = p.type === 'P' ? -Math.abs(o.delta || 0) : Math.abs(o.delta || 0);
         const dte = Math.max(0, Math.round((new Date(p.exp) - Date.now()) / 864e5));
-        return {ticker: t, type: p.type, strike: p.strike, exp: p.exp, dte, vol, oi, volOI,
-                price, notional, iv: o.iv || 0, delta: o.delta || 0, spot,
-                otm: spot == null ? null : (p.type === 'C' ? p.strike > spot : p.strike < spot),
-                lastTrade: o.last_trade_time || ''};
-      }).filter(Boolean);
+        /* aggressor inference: last trade at/near the ask = buyer-initiated,
+           at/near the bid = seller-initiated, in between = unclassified */
+        let sideSign = 0;
+        if (vol > 0 && o.last_trade_price && bid && ask && ask > bid) {
+          const w = Math.max(0.01, (ask - bid) * 0.2);
+          if (o.last_trade_price >= ask - w) sideSign = 1;
+          else if (o.last_trade_price <= bid + w) sideSign = -1;
+        }
+        if (spot != null && vol > 0) {
+          cs.netDelta += vol * delta * 100 * spot;
+          cs.absDelta += vol * Math.abs(delta) * 100 * spot;
+          cs[p.type === 'C' ? 'callPrem' : 'putPrem'] += notional;
+          if (sideSign) { cs.signedPrem += sideSign * notional * (p.type === 'C' ? 1 : -1); cs.classPrem += notional; }
+        }
+        /* dealer gamma exposure per 1% move — gamma from Black-Scholes using the
+           contract's own IV (the feed doesn't carry gamma). Convention: dealers
+           long the calls customers sold, short the puts customers bought. */
+        if (spot && iv > 0 && dte > 0 && oi > 0) {
+          const T = dte / 365, d1 = (Math.log(spot / p.strike) + (0.04 + iv * iv / 2) * T) / (iv * Math.sqrt(T));
+          const gamma = Math.exp(-d1 * d1 / 2) / Math.sqrt(2 * Math.PI) / (spot * iv * Math.sqrt(T));
+          if (isFinite(gamma)) cs.gex += (p.type === 'C' ? 1 : -1) * oi * gamma * 100 * spot * spot * 0.01;
+        }
+        /* per-expiry ATM and 25Δ IVs — feed term structure and skew */
+        if (iv > 0 && dte >= 2 && dte <= 95) {
+          const slot = cs.expIV[p.exp] = cs.expIV[p.exp] || {dte, atm: null, atmD: 9, c25: null, c25D: 9, p25: null, p25D: 9};
+          const ad = Math.abs(Math.abs(delta) - 0.5);
+          if (ad < slot.atmD) { slot.atmD = ad; slot.atm = iv; }
+          if (p.type === 'C') { const d = Math.abs(delta - 0.25); if (d < slot.c25D) { slot.c25D = d; slot.c25 = iv; } }
+          else { const d = Math.abs(delta + 0.25); if (d < slot.p25D) { slot.p25D = d; slot.p25 = iv; } }
+        }
+        const otm = spot == null ? null : (p.type === 'C' ? p.strike > spot : p.strike < spot);
+        /* liquid OTM contracts kept as candidate spread legs for recommendations */
+        if (otm && oi >= 50 && bid > 0 && dte >= 2 && dte <= 95)
+          cs.legs.push({type: p.type, strike: p.strike, exp: p.exp, dte, bid, ask, mid, iv, delta, oi});
+        const volOI = oi > 0 ? vol / oi : (vol > 0 ? 999 : 0);
+        out.push({ticker: t, type: p.type, strike: p.strike, exp: p.exp, dte, vol, oi, volOI,
+                  price, notional, iv, delta, spot, otm, bid, ask, sideSign,
+                  lastTrade: o.last_trade_time || ''});
+      }
+      const exps = Object.values(cs.expIV).filter(e => e.atm).sort((a, b) => a.dte - b.dte);
+      cs.skew25 = exps.length && exps[0].c25 && exps[0].p25 ? (exps[0].p25 - exps[0].c25) * 100 : null;
+      cs.term = exps.length >= 2 ? (exps[0].atm - exps[1].atm) * 100 : null;
+      cs.frontATM = exps.length ? exps[0].atm : null;
+      cs.nextATM = exps.length >= 2 ? exps[1].atm : null;
+      chainStats[t] = cs;
+      return out;
     } catch(e) { fails.push(t); return []; }
   }, 6);
+  flowState.chain = chainStats;
+  flowState.baseline = updateBaselines(chainStats);
   if (silent && fails.length === tickers.length && flowState.rows.length) {
     $('clock').textContent = 'Auto-refresh failed at ' + new Date().toLocaleTimeString() + ' — showing last data';
     return;
@@ -864,6 +946,9 @@ async function build13FIndex(onProgress) {
       if (!cur) return;
       let prev = null;
       if (f13[1]) { try { prev = await fetch13FHoldings(cik, f13[1].acc); } catch (e) {} }
+      /* fund's total reported book — lets each holding carry a conviction
+         weight (share of the fund's portfolio), not just a dollar value */
+      const fundTotal = [...cur.values()].reduce((a, b) => a + b, 0);
       const allKeys = new Set([...cur.keys(), ...(prev ? prev.keys() : [])]);
       for (const k of allKeys) {
         const [key, pc] = k.split('|');
@@ -876,7 +961,8 @@ async function build13FIndex(onProgress) {
           else if (v < pv * 0.75) change = 'TRIMMED';
         }
         if (!v && change !== 'EXITED') continue;
-        const rec = {fund: fundName, period: f13[0].period, value: v, prevValue: pv, change, putCall: pc};
+        const rec = {fund: fundName, period: f13[0].period, value: v, prevValue: pv, change, putCall: pc,
+                     pct: fundTotal > 0 && v ? v / fundTotal : null};
         if (!index.has(key)) index.set(key, []);
         index.get(key).push(rec);
       }
@@ -904,15 +990,16 @@ async function insiderScan(ticker, days) {
     } catch (e) { break; }
   }
   filings.sort((a, b) => b.fileDate.localeCompare(a.fileDate));
-  const out = {buyVal: 0, sellVal: 0, buyers: new Set(), sellers: new Set(), filings: 0};
+  const out = {buyVal: 0, sellVal: 0, buyers: new Set(), sellers: new Set(), filings: 0,
+               buyerTitles: {}, sellerTitles: {}};
   const parsed = await pool(filings.slice(0, 8), f => parseForm4(f).catch(() => null), 4);
   for (const rows of parsed) {
     if (!rows) continue;
     const mine = rows.filter(r => (r.ticker || '').toUpperCase() === ticker);
     if (mine.length) out.filings++;
     for (const r of mine) {
-      if (r.code === 'P') { out.buyVal += r.value; out.buyers.add(r.owner); }
-      if (r.code === 'S') { out.sellVal += r.value; out.sellers.add(r.owner); }
+      if (r.code === 'P') { out.buyVal += r.value; out.buyers.add(r.owner); if (r.title) out.buyerTitles[r.owner] = r.title; }
+      if (r.code === 'S') { out.sellVal += r.value; out.sellers.add(r.owner); if (r.title) out.sellerTitles[r.owner] = r.title; }
     }
   }
   return out;
@@ -938,10 +1025,34 @@ function scoreComponents(c) {
   { let s = 0, dir = 0;
     const total = c.flow.call + c.flow.put;
     if (total > 0) { s = Math.min(35, 12 * Math.log10(1 + total / 25e4)); dir = (c.flow.call - c.flow.put) / total; }
+    /* Direction from microstructure, not just the call/put premium split:
+       (a) aggressor-signed premium — bought calls & sold puts are bullish,
+           sold calls & bought puts are bearish (trade-at-ask/bid inference);
+       (b) net delta-adjusted dollar flow across the whole tape, normalized by
+           gross delta traded (bounded −1..1);
+       (c) the naive premium split, lowest weight, as the fallback.
+       Weighted by classification coverage — with no bid/ask data everything
+       gracefully degrades to the old premium-split read. */
+    const cs = c.chain;
+    if (cs) {
+      const dirs = [], wts = [];
+      const chainTotal = cs.callPrem + cs.putPrem;
+      if (cs.classPrem > 0 && chainTotal > 0 && cs.classPrem >= 0.3 * chainTotal) { dirs.push(cs.signedPrem / cs.classPrem); wts.push(2); }
+      if (cs.absDelta > 0) { dirs.push(cs.netDelta / cs.absDelta); wts.push(2); }
+      if (total > 0) { dirs.push((c.flow.call - c.flow.put) / total); wts.push(1); }
+      if (dirs.length) dir = dirs.reduce((a, d, i) => a + d * wts[i], 0) / wts.reduce((a, b) => a + b, 0);
+      /* net delta flow ≥2σ beyond this ticker's own baseline, in the same
+         direction the flow is pointing, earns an unusualness bonus */
+      if (c.z && c.z.nd != null && Math.abs(c.z.nd) >= 2 && Math.sign(c.z.nd) === Math.sign(dir || c.z.nd))
+        s = Math.min(35, s + 3);
+    }
     comps.flow = {s, dir, max: 35}; }
   { let s = 0, dir = 0;
     const B = c.ins.buyVal, S = c.ins.sellVal;
-    if (B > 0) s += Math.min(24, c.ins.buyers.size * 7 + 6 * Math.log10(1 + B / 1e5));
+    /* C-suite open-market buys carry extra weight (CEO/CFO buys are the
+       best-documented insider alpha); a cluster of distinct buyers even more */
+    const execBuys = Object.values(c.ins.buyerTitles || {}).filter(t => /chief|ceo|cfo|coo|president/i.test(t)).length;
+    if (B > 0) s += Math.min(24, (c.ins.buyers.size + 0.5 * execBuys) * 7 + 6 * Math.log10(1 + B / 1e5));
     if (S > 0) s += Math.min(8, 3 * Math.log10(1 + S / 1e6));
     if (B + S > 0) dir = (B - S) / (B + S);
     comps.ins = {s: Math.min(30, s), dir, max: 30}; }
@@ -949,8 +1060,12 @@ function scoreComponents(c) {
   if (c.inst) { let s = 0, dir = 0;
     const longV = held.filter(h => !h.putCall || h.putCall === 'call').reduce((a, h) => a + h.value, 0);
     const putV = held.filter(h => h.putCall === 'put').reduce((a, h) => a + h.value, 0);
-    const funds = new Set(held.map(h => h.fund)).size;
-    if (funds) { s = Math.min(20, funds * 6 + 2 * Math.log10(1 + (longV + putV) / 1e6)); dir = (longV - putV) / (longV + putV || 1); }
+    /* conviction-weight each fund by the position's share of that fund's book:
+       a 4% Burry position is a statement, a 0.05% Citadel line is inventory */
+    const wByFund = {};
+    held.forEach(h => { const w = h.pct != null ? Math.min(2, 0.5 + 25 * h.pct) : 1; wByFund[h.fund] = Math.max(wByFund[h.fund] || 0, w); });
+    const convW = Object.values(wByFund).reduce((a, b) => a + b, 0);
+    if (convW > 0) { s = Math.min(20, convW * 6 + 2 * Math.log10(1 + (longV + putV) / 1e6)); dir = (longV - putV) / (longV + putV || 1); }
     comps.inst = {s, dir, max: 20}; }
   if (c.cg) { let s = 0, dir = 0;
     const n = c.cg.buys + c.cg.sells;
@@ -987,10 +1102,35 @@ function scoreComponents(c) {
     if (total > 0 && c.flow.call / total > 0.35) add(Math.min(5, 5 * (c.flow.call / total - 0.35) / 0.3),
       `calls are ${Math.round(100 * c.flow.call / total)}% of whale premium`);
   }
+  /* microstructure cross-exam: what is the options market itself pricing
+     against this verdict? Skew, term structure, and the delta tape. */
+  const cs = c.chain, z = c.z || {};
+  if (cs && wDir !== 0) {
+    const ndr = cs.absDelta > 0 ? cs.netDelta / cs.absDelta : null;
+    if (wDir > 0) {
+      if (cs.skew25 != null && (cs.skew25 >= 8 || (z.sk != null && z.sk >= 1.5)))
+        add(Math.min(5, cs.skew25 / 4), `25Δ put skew at ${cs.skew25.toFixed(1)} vol pts${z.sk != null ? ` (${z.sk > 0 ? '+' : ''}${z.sk.toFixed(1)}σ vs baseline)` : ''} — downside protection heavily bid`);
+      if (cs.term != null && cs.term >= 3)
+        add(Math.min(4, cs.term / 2), `inverted IV term structure (front +${cs.term.toFixed(1)} pts over next expiry) — near-term event risk priced in`);
+      if (ndr != null && ndr <= -0.15)
+        add(Math.min(6, Math.abs(ndr) * 12), `tape is net SHORT delta (${fmt$(cs.netDelta)}) despite the bullish premium mix`);
+    } else {
+      if (cs.skew25 != null && (cs.skew25 <= -4 || (z.sk != null && z.sk <= -1.5)))
+        add(Math.min(5, Math.abs(cs.skew25) / 3), `call skew at ${cs.skew25.toFixed(1)} vol pts — upside being chased against the bear case`);
+      if (ndr != null && ndr >= 0.15)
+        add(Math.min(6, ndr * 12), `tape is net LONG delta (+${fmt$(cs.netDelta)}) despite the bearish premium mix`);
+    }
+  }
   counter.pts = Math.min(20, counter.pts);
   const adjRaw = Math.max(0, raw - counter.pts);
-  return {comps, score: Math.round(100 * raw / maxAvail), adjScore: Math.round(100 * adjRaw / maxAvail),
-          dir: wDir, active, counter};
+  const score = Math.round(100 * raw / maxAvail), adjScore = Math.round(100 * adjRaw / maxAvail);
+  /* confidence tier: how much should you trust this verdict? Driven by source
+     count, score-weighted directional agreement, evidence level, and how much
+     the cross-exam took back. Rendered next to the verdict and gates sizing. */
+  const agreeW = raw > 0 ? list.reduce((a, x) => a + (x.s > 0 && Math.sign(x.dir) === Math.sign(wDir || 1) ? x.s : 0), 0) / raw : 0;
+  const confidence = (active >= 3 && agreeW >= 0.7 && adjScore >= 40 && counter.pts <= 8) ? 'HIGH'
+                   : (active >= 2 && agreeW >= 0.55 && adjScore >= 22) ? 'MEDIUM' : 'LOW';
+  return {comps, score, adjScore, dir: wDir, active, counter, confidence, agreeW};
 }
 
 /* -------- market-implied odds (risk-neutral, from the whale's own contract) -------- */
@@ -1060,7 +1200,12 @@ async function runConfluence(silent) {
 
     confState.rows = tickers.map(t => {
       const inst = f13 && names && names[t] ? (f13.get(names[t]) || []) : (f13 ? [] : null);
-      const sc = scoreComponents({flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null});
+      const chain = (flowState.chain || {})[t] || null;
+      const z = chain ? {nd: zScore(flowState.baseline, t, 'nd', chain.netDelta),
+                         sk: zScore(flowState.baseline, t, 'sk', chain.skew25),
+                         gx: zScore(flowState.baseline, t, 'gx', chain.gex),
+                         iv: zScore(flowState.baseline, t, 'iv', chain.frontATM)} : {};
+      const sc = scoreComponents({flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null, chain, z});
       const label = sc.dir > 0.2 ? 'BULLISH' : sc.dir < -0.2 ? 'BEARISH' : 'MIXED';
       /* the whale's own contract supplies objective thesis parameters */
       const prints = flowState.rows.filter(x => x.ticker === t).sort((a, b) => b.notional - a.notional);
@@ -1081,20 +1226,43 @@ async function runConfluence(silent) {
           deadline: new Date(Date.now() + horizon * 864e5).toISOString().slice(0, 10)
         };
       }
-      /* recommended expression of the thesis — mirror the largest whale print
-         aligned with the verdict direction, preferring OTM (the speculative
-         side of the book). Everything below derives from that contract. */
+      /* recommended expression of the thesis: score every aligned whale print
+         the way an execution desk would — horizon coverage, delta band,
+         bid/ask spread, open interest (exit liquidity), aggressor side — and
+         keep the reasons so the pick can justify itself in the UI. */
       let rec = null;
       if (thesis) {
         const want = thesis.dir > 0 ? 'C' : 'P';
-        /* prefer a print you can actually hold for the thesis: OTM with ≥1
-           week to expiry, then any OTM, then any aligned print */
-        const p = prints.find(x => x.type === want && x.otm && x.dte >= 7)
-               || prints.find(x => x.type === want && x.otm)
-               || prints.find(x => x.type === want) || null;
-        rec = p ? {print: p, odds: impliedOdds(p)} : null;
+        const cands = prints.filter(x => x.type === want);
+        const scored = cands.map(x => {
+          let s = 0; const why = [];
+          if (x.dte >= thesis.horizon) { s += 3; why.push(`expiry covers the ${thesis.horizon}d horizon`); }
+          else s -= 4;
+          if (x.otm) s += 1;
+          const ad = Math.abs(x.delta);
+          if (ad >= 0.2 && ad <= 0.5) { s += 2; why.push(`${ad.toFixed(2)}Δ convexity sweet spot`); }
+          else if (ad < 0.1 && ad > 0) s -= 2;
+          const mid = x.bid && x.ask ? (x.bid + x.ask) / 2 : 0;
+          const spr = mid ? (x.ask - x.bid) / mid : null;
+          if (spr != null) {
+            if (spr <= 0.06) { s += 2; why.push(`tight ${(spr * 100).toFixed(0)}% spread`); }
+            else if (spr > 0.25) { s -= 2; why.push(`wide ${(spr * 100).toFixed(0)}% spread`); }
+          }
+          if (x.oi >= 500) { s += 2; why.push(`${fmtN(x.oi)} OI for exit liquidity`); }
+          else if (x.oi < 20) s -= 2;
+          if (x.sideSign === 1) { s += 2; why.push('whale bought at the ask'); }
+          else if (x.sideSign === -1) s -= 3; /* the whale SOLD this — don't mirror a seller */
+          s += Math.log10(1 + x.notional / 25e4);
+          return {x, s, why, spr};
+        }).sort((a, b) => b.s - a.s);
+        const best = scored[0] || null;
+        rec = {print: best ? best.x : null, odds: best ? impliedOdds(best.x) : null,
+               why: best ? best.why : [], spr: best ? best.spr : null,
+               nCands: cands.length,
+               allSold: cands.length > 0 && cands.every(k => k.sideSign === -1)};
       }
       return {ticker: t, score: sc.score, adjScore: sc.adjScore, counter: sc.counter,
+              confidence: sc.confidence, agreeW: sc.agreeW, chain, z,
               dirLabel: label, dir: sc.dir, active: sc.active, thesis, odds, top1, rec,
               badge: sc.active >= 3 ? 'STRONG' : sc.active >= 2 ? 'CONFLUENCE' : '',
               flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null,
@@ -1122,10 +1290,12 @@ async function runConfluence(silent) {
   btn.disabled = false;
 }
 
-/* Recommended expression of a row's verdict. Every value is derived from the
-   scan: direction from the confluence verdict, the contract from the largest
-   aligned whale print, cost/breakeven/odds from that contract's price and IV,
-   exit from the thesis invalidation and deadline. No trade is also an answer. */
+/* Recommended expression of a row's verdict — desk-style. Every value derives
+   from the scan: direction from the verdict, the contract from execution-
+   quality scoring of aligned whale prints, cost/breakeven/odds from that
+   contract's own price and IV, sizing from the ledger's empirical hit rate
+   Kelly-tested against the market's implied odds, exits from the thesis.
+   No trade is also an answer. */
 function recMove(r) {
   if (!r.thesis) {
     const why = r.dirLabel === 'MIXED'
@@ -1136,19 +1306,59 @@ function recMove(r) {
   const bull = r.thesis.dir > 0, cls = bull ? 'green' : 'red';
   const exit = `Exit if ${esc(r.thesis.invalidation)}, or at the ${esc(r.thesis.deadline)} verdict date, whichever comes first`;
   const p = r.rec && r.rec.print;
+  /* whales SELLING the aligned side = premium-harvesting flow, not conviction —
+     mirroring a seller by buying their contract is the classic retail mistake */
+  if (r.rec && r.rec.allSold) {
+    return `<b class="amber">RECOMMENDED MOVE</b> Careful — all ${r.rec.nCands} aligned ${bull ? 'call' : 'put'} print${r.rec.nCands === 1 ? '' : 's'} traded at the <i>bid</i>: whales are SELLING ${bull ? 'calls' : 'puts'}, harvesting premium rather than buying direction. Express the ${bull ? 'bullish' : 'bearish'} view in shares (${bull ? 'long' : 'short'} ${esc(r.ticker)}), not by buying their options. ${exit}. <span class="dim">Research signal, not financial advice.</span>`;
+  }
   if (!p) {
     return `<b class="${cls}">RECOMMENDED MOVE</b> ${bull ? 'Long' : 'Short'} ${esc(r.ticker)} shares — no ${bull ? 'call' : 'put'} whale print in today's flow to mirror with options. ${exit}. <span class="dim">Research signal, not financial advice.</span>`;
   }
   const o = r.rec.odds;
   const bePct = o && p.spot ? (o.be - p.spot) / p.spot * 100 : null;
+  let out = `<b class="${cls}">RECOMMENDED MOVE</b> Buy to open ${esc(r.ticker)} $${p.strike} ${p.type === 'C' ? 'CALL' : 'PUT'} exp ${esc(p.exp)} (${p.dte}d)` +
+    ` — ${fmt$(p.notional)} whale print${r.rec.why.length ? ', chosen for: ' + r.rec.why.map(esc).join(', ') : ''}.` +
+    ` ≈${fmt$(p.price * 100)} per contract (max loss)` +
+    (o ? ` · breakeven $${o.be.toFixed(2)}${bePct != null ? ` (${bePct > 0 ? '+' : ''}${bePct.toFixed(1)}% from spot)` : ''}` : '') + '.';
+  /* the edge test: an option is +EV only if the true probability beats what
+     the market is charging. The market's number comes from the contract's own
+     IV; "your" number comes from this app's graded ledger, once it has one. */
+  if (o) {
+    const graded = getLedger().filter(x => x.status === 'resolved');
+    const mkt = Math.round(o.beProb * 100);
+    if (graded.length >= 10) {
+      const wins = graded.filter(x => x.win).length;
+      const pEmp = (wins + 1) / (graded.length + 2); /* Laplace-smoothed hit rate */
+      const edge = pEmp - o.beProb;
+      if (edge > 0) {
+        const kelly = Math.min(0.05, edge / ((1 - o.beProb) / o.beProb) / 2); /* half-Kelly, 5% cap */
+        out += ` <b>EDGE</b> market charges ${mkt}% past-breakeven; this ledger's graded hit rate is ${Math.round(pEmp * 100)}% (${wins}/${graded.length}) → suggested risk ≤${(kelly * 100).toFixed(1)}% of book (half-Kelly).`;
+      } else {
+        out += ` <b class="amber">EDGE</b> market charges ${mkt}% past-breakeven but this ledger's graded hit rate is only ${Math.round(pEmp * 100)}% (${wins}/${graded.length}) — no statistical edge at this price; paper-trade it.`;
+      }
+    } else {
+      out += ` <b>EDGE TEST</b> the trade is +EV only if the true past-breakeven odds beat the ${mkt}% the market is charging — with ${graded.length} graded thes${graded.length === 1 ? 'is' : 'es'} on the ledger there's no track record to size from yet, so treat as a minimum-size research position.`;
+    }
+  }
+  /* IV-cost check: paying rich front IV? Offer the debit-spread version with a
+     real short leg from this scan's own chain. */
+  const cs = r.chain;
+  if (cs && cs.nextATM && p.iv > 1.25 * cs.nextATM && cs.legs) {
+    const idealK = p.strike * (bull ? 1 + 0.5 * p.iv * Math.sqrt(Math.max(p.dte, 1) / 365) : 1 - 0.5 * p.iv * Math.sqrt(Math.max(p.dte, 1) / 365));
+    const leg = cs.legs.filter(l => l.type === p.type && l.exp === p.exp && (bull ? l.strike > p.strike : l.strike < p.strike))
+      .sort((a, b) => Math.abs(a.strike - idealK) - Math.abs(b.strike - idealK))[0];
+    if (leg) {
+      const debit = ((p.ask || p.price) - leg.bid) * 100;
+      if (debit > 0) out += ` <span class="amber">IV is rich (${Math.round(p.iv * 100)}% vs ${Math.round(cs.nextATM * 100)}% next-expiry ATM)</span> — the spread version cuts the vol bill: buy $${p.strike} / sell $${leg.strike} same expiry, ≈${fmt$(debit)} net debit, max value ${fmt$(Math.abs(leg.strike - p.strike) * 100)}.`;
+    }
+  }
+  if (cs && cs.gex > 0 && p.dte < 10)
+    out += ` <span class="dim">Dealers are long gamma here (pinning regime) — short-dated directional bets fight the tape; prefer the longer expiry.</span>`;
+  if (r.confidence === 'LOW')
+    out += ` <span class="amber">LOW-confidence verdict — sources thin or split; treat as a watchlist idea, not a position.</span>`;
   const expiryNote = p.dte < r.thesis.horizon
     ? ` <span class="amber">Contract expires in ${p.dte}d — before the ${r.thesis.horizon}d thesis deadline, so plan to roll or take profit early.</span>` : '';
-  return `<b class="${cls}">RECOMMENDED MOVE</b> Buy to open ${esc(r.ticker)} $${p.strike} ${p.type === 'C' ? 'CALL' : 'PUT'} exp ${esc(p.exp)} (${p.dte}d)` +
-    ` — mirrors the largest aligned whale print (${fmt$(p.notional)} traded, ${p.volOI >= 999 ? '∞' : p.volOI.toFixed(1)}× vol/OI).` +
-    ` ≈${fmt$(p.price * 100)} per contract` +
-    (o ? ` · breakeven $${o.be.toFixed(2)}${bePct != null ? ` (${bePct > 0 ? '+' : ''}${bePct.toFixed(1)}% from spot $${p.spot})` : ''}` +
-         ` · market-implied ${Math.round(o.itm * 100)}% ITM / ${Math.round(o.beProb * 100)}% past breakeven` : '') +
-    `. ${exit}.${expiryNote} <span class="dim">Research signal, not financial advice — size accordingly.</span>`;
+  return out + ` ${exit}.${expiryNote} <span class="dim">Research signal, not financial advice.</span>`;
 }
 
 function renderConfluence() {
@@ -1158,13 +1368,15 @@ function renderConfluence() {
   sortable($('conf-table'), confState.rows, r => {
     const f = r.flow, i = r.ins;
     const fDet = f.prints ? `${fmt$(f.call + f.put)} · ${Math.round(100 * f.call / (f.call + f.put || 1))}% calls · ${f.prints} prints` : 'no whale prints';
+    const execBuyers = Object.values(i.buyerTitles || {}).filter(t => /chief|ceo|cfo|coo|president/i.test(t)).length;
     const iDet = (i.buyers.size || i.sellers.size)
-      ? `${i.buyers.size} buyer${i.buyers.size === 1 ? '' : 's'} ${fmt$(i.buyVal)} / ${i.sellers.size} seller${i.sellers.size === 1 ? '' : 's'} ${fmt$(i.sellVal)}` : 'no P/S filings';
+      ? `${i.buyers.size} buyer${i.buyers.size === 1 ? '' : 's'}${execBuyers ? ` (${execBuyers} C-suite)` : ''} ${fmt$(i.buyVal)} / ${i.sellers.size} seller${i.sellers.size === 1 ? '' : 's'} ${fmt$(i.sellVal)}` +
+        (i.buyers.size >= 3 ? ' · <b class="green">CLUSTER BUY</b>' : '') : 'no P/S filings';
     const held = r.inst ? r.inst.filter(h => h.value > 0) : [];
     const changes = r.inst ? r.inst.filter(h => h.change && h.change !== 'HELD') : [];
     const nDet = r.inst == null ? '' : (held.length || changes.length
       ? `${new Set(held.map(h => h.fund)).size} funds ${fmt$(held.reduce((a, h) => a + h.value, 0))}` +
-        (changes.length ? ' · ' + changes.map(h => `${h.fund.split(' ')[0]} ${h.change}`).join(', ') : '')
+        (changes.length ? ' · ' + changes.map(h => `${h.fund.split(' ')[0]} ${h.change}${h.pct != null ? ` (${(100 * h.pct).toFixed(1)}% of book)` : ''}`).join(', ') : '')
       : 'not held');
     const cDet = r.cg == null ? '' : (r.cg.buys + r.cg.sells ? `${r.cg.buys} buys / ${r.cg.sells} sells` : 'no trades');
 
@@ -1179,6 +1391,17 @@ function renderConfluence() {
       detail += `<br><b class="accent">MARKET ODDS</b> biggest print (${esc(r.top1.type === 'C' ? 'CALL' : 'PUT')} $${r.top1.strike} ${esc(r.top1.exp)}): ` +
         `options market prices ${Math.round(r.odds.itm * 100)}% chance ITM at expiry, ${Math.round(r.odds.beProb * 100)}% beyond the whale's $${r.odds.be.toFixed(0)} breakeven`;
     }
+    if (r.chain) {
+      const cs = r.chain, z = r.z || {};
+      const zTag = v => v == null ? '' : ` <span class="${Math.abs(v) >= 2 ? 'amber' : 'dim'}">(${v > 0 ? '+' : ''}${v.toFixed(1)}σ)</span>`;
+      const parts = [];
+      if (cs.absDelta > 0) parts.push(`net Δ-adjusted flow <b class="${cs.netDelta >= 0 ? 'green' : 'red'}">${cs.netDelta >= 0 ? '+' : '−'}${fmt$(Math.abs(cs.netDelta))}</b>${zTag(z.nd)}`);
+      if (cs.gex) parts.push(`dealer gamma <b>${cs.gex >= 0 ? '+' : '−'}${fmt$(Math.abs(cs.gex))}</b>/1%${zTag(z.gx)} <span class="dim">${cs.gex >= 0 ? 'pinning regime — moves dampened' : 'negative gamma — moves amplified'}</span>`);
+      if (cs.skew25 != null) parts.push(`25Δ skew ${cs.skew25 >= 0 ? '+' : ''}${cs.skew25.toFixed(1)} pts${zTag(z.sk)}`);
+      if (cs.term != null) parts.push(`term ${cs.term >= 0 ? 'front +' + cs.term.toFixed(1) + ' pts (inverted)' : 'upward (calm)'}`);
+      if (parts.length) detail += `<br><b class="accent">MARKET STRUCTURE</b> ${parts.join(' · ')}` +
+        (z.nd == null ? ' <span class="dim">— z-scores appear after 5 scan-days of baseline</span>' : '');
+    }
     if (r.counter.notes.length) {
       detail += `<br><b class="amber">CROSS-EXAM</b> ${r.counter.notes.map(esc).join(' · ')}`;
     } else if (r.thesis) {
@@ -1189,7 +1412,7 @@ function renderConfluence() {
       <td class="l"><b>${esc(r.ticker)}</b></td>
       <td><b style="font-size:15px">${r.adjScore}</b><span class="dim">/100</span>${r.counter.pts ? `<span class="amber" style="font-size:11px"> (${r.score} −${r.counter.pts.toFixed(0)})</span>` : ''}
         <div class="ratiobar" style="width:90px"><div class="c" style="width:${r.adjScore}%"></div></div></td>
-      <td class="l"><span class="tag ${r.dirLabel === 'BULLISH' ? 'buy' : r.dirLabel === 'BEARISH' ? 'sell' : 'other'}">${r.dirLabel}</span></td>
+      <td class="l"><span class="tag ${r.dirLabel === 'BULLISH' ? 'buy' : r.dirLabel === 'BEARISH' ? 'sell' : 'other'}">${r.dirLabel}</span><div class="dim" style="font-size:10px;margin-top:2px">${r.confidence === 'HIGH' ? '<span class="green">●</span>' : r.confidence === 'MEDIUM' ? '<span class="amber">●</span>' : '<span class="red">●</span>'} ${r.confidence} confidence</div></td>
       <td class="l">${r.badge ? `<span class="tag ${r.badge === 'STRONG' ? 'buy' : 'other'}" style="${r.badge === 'STRONG' ? 'background:rgba(255,200,87,.15);color:var(--amber)' : ''}">${r.badge}</span>` : '<span class="dim">—</span>'}</td>
       <td class="l">${cell(r.flowS, 35, fDet)}</td>
       <td class="l">${cell(r.insS, 30, iDet)}</td>

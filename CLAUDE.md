@@ -60,3 +60,29 @@ Notional = volume × last price (approximation; true premium needs paid per-trad
 Delayed aggregate data can't attribute trade direction (buy vs sell). 13F lags ≤45d (positioning,
 not timing). Congress disclosures lag ≤45d. localStorage ledger is per-origin — port changes
 (8742→8743 on conflict) move the origin; export CSV for durability.
+
+## Quant layer (script blocks 2 + 5, added 2026-07)
+
+- **Aggressor inference**: last trade within 20% of the ask → buyer-initiated (+1), of the bid →
+  seller-initiated (−1), else unclassified (0). Stored per row as `sideSign`. Flow direction blends
+  aggressor-signed premium (w2) + net delta-adjusted flow / gross delta (w2) + naive premium split (w1);
+  degrades gracefully to naive when <30% of premium classifies.
+- **GEX**: gamma is NOT in the CBOE feed — computed via Black-Scholes from each contract's own IV
+  (r=4%). Convention: calls +, puts − (dealer-long-calls/short-puts naive assumption), $ per 1% move.
+- **Skew/term**: 25Δ put IV − 25Δ call IV (front expiry, 2–95 DTE); term = front ATM − next ATM in
+  vol pts (positive = inverted). Both feed the cross-exam with itemized deductions.
+- **Baselines**: `wt_baseline` in localStorage — per ticker, one record/day, 60 kept, of
+  {nd, pc, sk, gx, iv}. `zScore()` needs ≥5 prior days; z shown in MARKET STRUCTURE + used in
+  cross-exam and flow unusualness bonus. Identical seeded values ⇒ sd=0 ⇒ z null (tests must vary).
+- **Conviction weights**: 13F entries carry `pct` (value / fund's total book) → per-fund weight
+  clamp(0.5 + 25·pct, 0.5, 2). Insider buyerTitles/sellerTitles from Form 4 XML; C-suite regex
+  /chief|ceo|cfo|coo|president/i gets 1.5× buyer weight; ≥3 buyers = CLUSTER BUY badge.
+- **Confidence tier**: HIGH needs active≥3 ∧ agreement≥0.7 ∧ adj≥40 ∧ counter≤8; MEDIUM active≥2 ∧
+  agreement≥0.55 ∧ adj≥22; else LOW (gates sizing language in recMove).
+- **recMove edge test**: market past-breakeven prob (N(d2) at breakeven) vs ledger's Laplace-smoothed
+  hit rate ((w+1)/(n+2)); needs ≥10 resolved theses; positive edge → half-Kelly capped at 5%.
+  All-aligned-prints-sold-at-bid ⇒ premium-selling flow ⇒ route to shares, never mirror a seller.
+  IV > 1.25× next-expiry ATM ⇒ debit-spread alt with a real short leg from `chain.legs`.
+- Testing bar is now 59 jsdom assertions (scratchpad test-static.js pattern) — keep invariants:
+  |signedPrem| ≤ classPrem ≤ callPrem+putPrem; sideSign ∈ {−1,0,1}; pct ∈ (0,1]; rec contract must
+  exist in flowState.rows; Kelly text only with ≥10 graded.
