@@ -1,0 +1,44 @@
+name: Confluence thesis alerts
+
+on:
+  workflow_dispatch:
+    inputs:
+      min_conf:
+        description: 'Minimum confidence to alert on'
+        type: choice
+        options: [HIGH, MEDIUM, LOW]
+        default: HIGH
+  schedule:
+    # every 15 min through US market hours, offset from the data-snapshot cron
+    - cron: '9/15 13-21 * * 1-5'
+    # one pre-open scan (overnight Form 4 filings can flip a verdict)
+    - cron: '51 12 * * 1-5'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: alerts
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install jsdom
+        run: npm init -y >/dev/null && npm i jsdom --no-audit --no-fund --silent
+
+      - name: Run confluence scan and file alerts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+          MIN_CONF: ${{ inputs.min_conf || 'HIGH' }}
+          SITE_BASE: https://jason-xuu.github.io/whale
+        run: node scripts/alert-scan.mjs

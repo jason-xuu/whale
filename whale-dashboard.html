@@ -918,7 +918,9 @@ async function fetchCongress(silent) {
   } catch(e) {
     if (!silent) {
       $('cg-table').innerHTML = '<div class="loading">—</div>';
-      const hint = /403|401/.test(e.message) ? ' — key invalid, or this endpoint may need a higher Finnhub tier. Free fallback: <a href="https://www.quiverquant.com/congresstrading/" target="_blank" rel="noopener">QuiverQuant</a>' : '';
+      const hint = /403/.test(e.message)
+        ? ' — Finnhub moved congressional data to its paid tier (your key still powers real-time spot prices everywhere else). Confluence scores normalize without this source. Browse free: <a href="https://www.quiverquant.com/congresstrading/" target="_blank" rel="noopener">QuiverQuant</a>'
+        : /401/.test(e.message) ? ' — key invalid; re-check it at finnhub.io' : '';
       setMsg('cg-msg', 'Failed: ' + esc(e.message) + hint, 'err');
     }
   }
