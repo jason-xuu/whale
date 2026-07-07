@@ -864,6 +864,10 @@ $('ins-refresh').onclick = () => fetchInsiders();
 /* ================= CONGRESS — Finnhub ================= */
 const cgState = {sort: {key: 'transactionDate', dir: -1}};
 $('cg-key').value = store.get('finnhub', '');
+/* persist the key the moment it's entered (browser localStorage only — it is
+   never uploaded anywhere) so live spots and confluence see it immediately,
+   not just after a congress fetch */
+$('cg-key').addEventListener('change', () => store.set('finnhub', $('cg-key').value.trim()));
 $('cg-watchlist').value = store.get('cg_watchlist', 'NVDA,AAPL,MSFT,TSLA,META');
 
 async function fetchCongress(silent) {
