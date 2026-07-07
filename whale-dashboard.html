@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Whale Tracker — Options Flow · 13F · Insiders · Congress</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#121722; --panel2:#181f2e; --border:#232c3f;
+    --text:#dbe2f0; --dim:#7d8aa5; --accent:#4cc9f0; --green:#2ecc71; --red:#ff5964;
+    --amber:#ffc857; --mono:"SF Mono",Consolas,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:18px 22px 60px}
+  h1{font-size:19px;letter-spacing:.4px;display:flex;align-items:center;gap:10px}
+  h1 .whale{font-size:24px}
+  .sub{color:var(--dim);font-size:12px;margin-top:3px}
+  header{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+  .tabs{display:flex;gap:6px;border-bottom:1px solid var(--border);margin-bottom:16px;flex-wrap:wrap}
+  .tab{padding:9px 16px;cursor:pointer;color:var(--dim);border:1px solid transparent;border-bottom:none;border-radius:8px 8px 0 0;font-weight:600;font-size:13px}
+  .tab:hover{color:var(--text)}
+  .tab.active{color:var(--accent);background:var(--panel);border-color:var(--border)}
+  .panel{display:none}
+  .panel.active{display:block}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .controls label{color:var(--dim);font-size:12px;display:flex;flex-direction:column;gap:3px}
+  input,select,button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:7px;padding:7px 10px;font-size:13px;outline:none}
+  input:focus,select:focus{border-color:var(--accent)}
+  button{cursor:pointer;font-weight:600}
+  button.primary{background:var(--accent);color:#04121a;border-color:var(--accent)}
+  button:hover{filter:brightness(1.15)}
+  button:disabled{opacity:.5;cursor:wait}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:10px 14px}
+  .stat .k{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+  .stat .v{font-size:19px;font-weight:700;font-family:var(--mono);margin-top:2px}
+  .stat .v.green{color:var(--green)} .stat .v.red{color:var(--red)} .stat .v.accent{color:var(--accent)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{color:var(--dim);text-align:right;padding:8px 9px;border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.5px;cursor:pointer;user-select:none;white-space:nowrap}
+  th.l,td.l{text-align:left} th:hover{color:var(--text)}
+  th.sorted{color:var(--accent)}
+  td{padding:7px 9px;border-bottom:1px solid #1a2233;text-align:right;font-family:var(--mono);white-space:nowrap}
+  tr:hover td{background:#1a2233}
+  tr.trow td{background:#0e1320;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:12px;color:var(--dim);padding:8px 12px 10px;border-bottom:2px solid var(--border);white-space:normal;line-height:1.6}
+  tr.trow:hover td{background:#0e1320}
+  .tag{display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:700;font-family:var(--mono)}
+  .tag.call,.tag.buy{background:rgba(46,204,113,.15);color:var(--green)}
+  .tag.put,.tag.sell{background:rgba(255,89,100,.15);color:var(--red)}
+  .tag.other{background:rgba(125,138,165,.15);color:var(--dim)}
+  .green{color:var(--green)} .red{color:var(--red)} .dim{color:var(--dim)} .amber{color:var(--amber)}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  .msg{padding:12px 14px;border-radius:8px;margin-bottom:12px;font-size:13px}
+  .msg.err{background:rgba(255,89,100,.1);border:1px solid rgba(255,89,100,.35);color:#ffb3b8}
+  .msg.info{background:rgba(76,201,240,.08);border:1px solid rgba(76,201,240,.3);color:#a8e4f7}
+  .loading{color:var(--dim);padding:30px;text-align:center;font-size:13px}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--dim);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .ratiobar{height:10px;border-radius:5px;overflow:hidden;display:flex;background:var(--panel2);margin-top:6px}
+  .ratiobar .c{background:var(--green)} .ratiobar .p{background:var(--red)}
+  .fundgrid{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .fund{padding:7px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel2);cursor:pointer;font-size:12.5px;font-weight:600}
+  .fund:hover{border-color:var(--accent);color:var(--accent)}
+  .fund.active{background:var(--accent);color:#04121a;border-color:var(--accent)}
+  .tablewrap{overflow-x:auto}
+  .foot{color:var(--dim);font-size:11.5px;margin-top:10px}
+  .updated{color:var(--dim);font-size:12px}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1><span class="whale">🐋</span> Whale Tracker</h1>
+    <div class="sub">Large positions across options flow, institutions, insiders &amp; congress — free data sources, 15-min+ delays apply</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:14px">
+    <label class="dim" style="font-size:12px">Auto-refresh
+      <select id="auto-refresh" style="margin-left:6px">
+        <option value="0">Off</option>
+        <option value="1">1 min</option>
+        <option value="5" selected>5 min</option>
+        <option value="15">15 min</option>
+      </select>
+    </label>
+    <div class="updated" id="clock"></div>
+  </div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" data-panel="flow">Options Flow</div>
+  <div class="tab" data-panel="conf">⚡ Confluence</div>
+  <div class="tab" data-panel="inst">Institutions (13F)</div>
+  <div class="tab" data-panel="insider">Insiders (Form 4)</div>
+  <div class="tab" data-panel="congress">Congress</div>
+</div>
+
+<!-- ============ OPTIONS FLOW ============ -->
+<section class="panel active" id="panel-flow">
+  <div class="controls card">
+    <label>Watchlist (comma-separated)
+      <input id="flow-watchlist" style="width:340px" spellcheck="false">
+    </label>
+    <label>Min volume
+      <input id="flow-minvol" type="number" value="500" style="width:90px">
+    </label>
+    <label>Min notional $
+      <select id="flow-minnotional" style="width:110px">
+        <option value="100000">$100K</option>
+        <option value="250000" selected>$250K</option>
+        <option value="1000000">$1M</option>
+        <option value="5000000">$5M</option>
+      </select>
+    </label>
+    <label>Min Vol/OI
+      <select id="flow-minvoloi" style="width:80px">
+        <option value="0">Any</option>
+        <option value="1.5" selected>1.5×</option>
+        <option value="3">3×</option>
+        <option value="5">5×</option>
+      </select>
+    </label>
+    <label>Side
+      <select id="flow-side" style="width:90px">
+        <option value="all">All</option>
+        <option value="C">Calls</option>
+        <option value="P">Puts</option>
+      </select>
+    </label>
+    <label>&nbsp;<button class="primary" id="flow-refresh">Scan</button></label>
+  </div>
+  <div id="flow-stats" class="stats"></div>
+  <div id="flow-msg"></div>
+  <div class="card tablewrap"><div id="flow-table" class="loading">Press Scan to fetch options chains</div></div>
+  <div class="foot">Source: CBOE delayed quotes (15 min). Vol/OI &gt; 1.5 means today's volume exceeds existing open interest — often fresh positioning. Notional = volume × price × 100. Outside market hours, volume reflects the last session.</div>
+</section>
+
+<!-- ============ CONFLUENCE ============ -->
+<section class="panel" id="panel-conf">
+  <div class="controls card">
+    <label>Tickers
+      <input id="conf-watchlist" style="width:320px" spellcheck="false">
+    </label>
+    <label>Insider / congress lookback
+      <select id="conf-days" style="width:110px">
+        <option value="30">30 days</option>
+        <option value="90" selected>90 days</option>
+        <option value="180">180 days</option>
+      </select>
+    </label>
+    <label style="flex-direction:row;align-items:center;gap:7px;padding-top:16px">
+      <input type="checkbox" id="conf-13f" checked style="width:auto"> Include 13F scan of 12 whale funds <span class="dim">(heavy — first run can take a minute, then cached)</span>
+    </label>
+    <label>&nbsp;<button class="primary" id="conf-run">Run confluence scan</button></label>
+  </div>
+  <div id="conf-stats" class="stats"></div>
+  <div class="card" id="conf-record" style="margin-bottom:12px"></div>
+  <div id="conf-msg"></div>
+  <div class="card tablewrap"><div id="conf-table" class="loading">Scans each ticker across all four whale sources and scores how strongly they align. Run the scan to begin.</div></div>
+  <div class="foot">
+    Methodology — weighted components: <b>Options flow 35</b> (today's whale prints; direction = call vs put premium tilt) ·
+    <b>Insiders 30</b> (Form 4 filings over the lookback; open-market buys weighted heaviest — the best-documented signal; sales weighted low, they're usually noise) ·
+    <b>Institutions 20</b> (latest 13F holdings of 12 tracked funds; put positions count as bearish; quarterly data with up to 45-day lag — positioning, not timing) ·
+    <b>Congress 15</b> (STOCK Act disclosures, up to 45-day reporting lag; requires Finnhub key, otherwise excluded from the score).
+    Score = points earned ÷ points available from active sources, <b>minus itemized cross-examination deductions</b> (evidence opposing the prevailing direction: insider sales against bullish flow, fund puts, quarter-over-quarter trims/exits — capped at 20 pts, every deduction shown).
+    CONFLUENCE badge = 2+ sources active on a ticker, STRONG = 3+.
+    <br><br>
+    <b>Theses &amp; ledger</b>: each directional row becomes a falsifiable claim — outperform/underperform SPY over a fixed horizon (14d default, 21d for strong confluence, 30d when insiders dominate, since insider alpha is slower), with an objective invalidation level taken from the whale's own strike when available. "Log theses" snapshots entry prices; after each deadline the dashboard grades itself against real prices and shows its cumulative hit rate and average excess return — including losses. <b>Market odds</b> lines are risk-neutral probabilities implied by the whale contract's own IV (Black-Scholes N(d₂)) — what the options market itself believes, as a reality check on the signal.
+    Data lags still apply (13F quarterly, congress up to 45d). This is a research instrument, not trade advice — judge it by its ledger, and verify filings via the links in each tab.
+  </div>
+</section>
+
+<!-- ============ INSTITUTIONS 13F ============ -->
+<section class="panel" id="panel-inst">
+  <div class="card" style="margin-bottom:12px">
+    <div class="fundgrid" id="fund-grid"></div>
+    <div class="controls" style="margin-bottom:0">
+      <label>Custom CIK or 10-digit EDGAR ID
+        <input id="inst-cik" placeholder="e.g. 1067983" style="width:180px">
+      </label>
+      <label>&nbsp;<button class="primary" id="inst-load">Load 13F</button></label>
+    </div>
+  </div>
+  <div id="inst-stats" class="stats"></div>
+  <div id="inst-msg"></div>
+  <div class="card tablewrap"><div id="inst-table" class="loading">Pick a fund to load its latest 13F holdings</div></div>
+  <div class="foot" id="inst-foot"></div>
+  <div class="foot">Source: SEC EDGAR. 13F-HR filings are quarterly with up to 45-day lag — this shows positioning, not live trades. Values as reported (USD).</div>
+</section>
+
+<!-- ============ INSIDERS FORM 4 ============ -->
+<section class="panel" id="panel-insider">
+  <div class="controls card">
+    <label>Min transaction value
+      <select id="ins-minval" style="width:110px">
+        <option value="100000">$100K</option>
+        <option value="250000" selected>$250K</option>
+        <option value="1000000">$1M</option>
+        <option value="10000000">$10M</option>
+      </select>
+    </label>
+    <label>Type
+      <select id="ins-type" style="width:150px">
+        <option value="all">All transactions</option>
+        <option value="P" selected>Open-market buys (P)</option>
+        <option value="S">Sales (S)</option>
+      </select>
+    </label>
+    <label>Filings to parse
+      <select id="ins-count" style="width:90px">
+        <option value="40" selected>40</option>
+        <option value="80">80</option>
+        <option value="150">150</option>
+      </select>
+    </label>
+    <label>&nbsp;<button class="primary" id="ins-refresh">Fetch latest</button></label>
+  </div>
+  <div id="ins-stats" class="stats"></div>
+  <div id="ins-msg"></div>
+  <div class="card tablewrap"><div id="ins-table" class="loading">Press "Fetch latest" to pull recent Form 4 filings from SEC EDGAR</div></div>
+  <div class="foot">Source: SEC EDGAR Form 4 (insider transactions), filed within 2 business days of the trade. Code P = open-market purchase (strongest signal), S = sale, A = grant/award, M = option exercise, F = tax withholding, G = gift.</div>
+</section>
+
+<!-- ============ CONGRESS ============ -->
+<section class="panel" id="panel-congress">
+  <div class="controls card">
+    <label>Finnhub API key (free at finnhub.io/register)
+      <input id="cg-key" type="password" placeholder="paste key" style="width:220px" spellcheck="false">
+    </label>
+    <label>Tickers
+      <input id="cg-watchlist" style="width:280px" spellcheck="false">
+    </label>
+    <label>&nbsp;<button class="primary" id="cg-refresh">Fetch</button></label>
+  </div>
+  <div id="cg-msg"></div>
+  <div class="card tablewrap"><div id="cg-table" class="loading">Enter a free Finnhub key and press Fetch. No key? Browse <a href="https://www.quiverquant.com/congresstrading/" target="_blank" rel="noopener">QuiverQuant</a> or <a href="https://unusualwhales.com/politics" target="_blank" rel="noopener">Unusual Whales politics</a> manually.</div></div>
+  <div class="foot">Source: Finnhub congressional trading (STOCK Act disclosures). Politicians report ranges, not exact amounts; disclosures can lag trades by up to 45 days.</div>
+</section>
+
+<script>
+/* ================= shared helpers ================= */
+const $ = id => document.getElementById(id);
+const fmt$ = n => {
+  if (n == null || isNaN(n)) return '—';
+  const a = Math.abs(n);
+  if (a >= 1e9) return '$' + (n/1e9).toFixed(2) + 'B';
+  if (a >= 1e6) return '$' + (n/1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return '$' + (n/1e3).toFixed(1) + 'K';
+  return '$' + n.toFixed(0);
+};
+const fmtN = n => n == null || isNaN(n) ? '—' : n.toLocaleString('en-US', {maximumFractionDigits: 0});
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = {
+  get(k, d){ try { const v = localStorage.getItem('wt_' + k); return v == null ? d : v; } catch(e){ return d; } },
+  set(k, v){ try { localStorage.setItem('wt_' + k, v); } catch(e){} }
+};
+/* Direct fetch first; if the browser blocks it (CORS / local-file security),
+   retry through public CORS relays. Only public market data goes through
+   relays — requests carrying API keys set relay:false and never do. */
+const LOCAL_SRV = location.protocol.startsWith('http') && ['127.0.0.1', 'localhost'].includes(location.hostname);
+let RELAY_MODE = false;
+const RELAYS = [
+  u => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+  u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u)
+];
+async function fetchOnce(url, opts, timeout) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const r = await fetch(url, {signal: ctrl.signal, headers: opts.headers});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return opts.text ? await r.text() : await r.json();
+  } finally { clearTimeout(t); }
+}
+async function fetchJSON(url, opts = {}) {
+  /* Served by the local launcher: route through its same-origin proxy — no CORS at all.
+     API-key requests (relay:false) always go direct and never touch the proxy. */
+  if (LOCAL_SRV && opts.relay !== false) {
+    return await fetchOnce('/proxy?url=' + encodeURIComponent(url), opts, opts.timeout || 45000);
+  }
+  try {
+    return await fetchOnce(url, opts, opts.timeout || 30000);
+  } catch(e) {
+    if (opts.relay === false) throw e;
+    for (const wrap of RELAYS) {
+      try {
+        const v = await fetchOnce(wrap(url), opts, 20000);
+        if (!RELAY_MODE) { RELAY_MODE = true; showRelayNote(); }
+        return v;
+      } catch(e2) { /* try next relay */ }
+    }
+    throw e;
+  }
+}
+function showRelayNote() {
+  if (document.getElementById('relay-note')) return;
+  const div = document.createElement('div');
+  div.id = 'relay-note';
+  div.className = 'msg info';
+  div.innerHTML = 'Direct connections were blocked, so public market data is going through a relay (slower; API keys never do). ' +
+    'For reliable full-speed data, close this tab and double-click <b>Start Whale Tracker.command</b> instead — it opens this same dashboard through a tiny local server.';
+  document.querySelector('.tabs').before(div);
+}
+/* concurrency-limited queue (be polite to SEC: max ~5 in flight) */
+async function pool(items, worker, limit = 5, onProgress) {
+  const out = new Array(items.length); let i = 0, done = 0;
+  async function run() {
+    while (i < items.length) {
+      const idx = i++;
+      try { out[idx] = await worker(items[idx], idx); } catch(e) { out[idx] = null; }
+      done++; if (onProgress) onProgress(done, items.length);
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(limit, items.length)}, run));
+  return out;
+}
+function sortable(tableEl, rows, renderRow, cols, state) {
+  // cols: [{key, label, left?, num?}] ; state: {key, dir}
+  const thead = '<tr>' + cols.map(c =>
+    `<th class="${c.left ? 'l' : ''} ${state.key === c.key ? 'sorted' : ''}" data-k="${c.key}">${c.label}${state.key === c.key ? (state.dir < 0 ? ' ▼' : ' ▲') : ''}</th>`).join('') + '</tr>';
+  const sorted = [...rows].sort((a, b) => {
+    const va = a[state.key], vb = b[state.key];
+    if (typeof va === 'string') return state.dir * String(va).localeCompare(String(vb));
+    return state.dir * ((va ?? -Infinity) - (vb ?? -Infinity));
+  });
+  tableEl.innerHTML = `<table><thead>${thead}</thead><tbody>${sorted.map(renderRow).join('')}</tbody></table>`;
+  tableEl.querySelectorAll('th').forEach(th => th.onclick = () => {
+    const k = th.dataset.k;
+    if (state.key === k) state.dir *= -1; else { state.key = k; state.dir = -1; }
+    sortable(tableEl, rows, renderRow, cols, state);
+  });
+}
+const setMsg = (id, html, cls) => { $(id).innerHTML = html ? `<div class="msg ${cls || 'info'}">${html}</div>` : ''; };
+const setLoading = (id, txt) => { $(id).innerHTML = `<div class="loading"><span class="spinner"></span>${txt}</div>`; };
+
+/* tabs */
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+  t.classList.add('active'); $('panel-' + t.dataset.panel).classList.add('active');
+});
+$('clock').textContent = new Date().toLocaleString();
+</script>
+<script>
+/* ================= OPTIONS FLOW (CBOE delayed) ================= */
+const INDEX_MAP = {SPX:'_SPX', VIX:'_VIX', RUT:'_RUT', DJX:'_DJX', XSP:'_XSP', NDX:'_NDX'};
+const flowState = {rows: [], sort: {key: 'notional', dir: -1}};
+$('flow-watchlist').value = store.get('watchlist', 'SPY,QQQ,NVDA,TSLA,AAPL,MSFT,META,AMD');
+
+function parseOptionSymbol(sym) {
+  const m = /^_?([A-Z0-9]+?)(\d{6})([CP])(\d{8})$/.exec(sym);
+  if (!m) return null;
+  const [, root, d, type, k] = m;
+  const exp = `20${d.slice(0,2)}-${d.slice(2,4)}-${d.slice(4,6)}`;
+  return {root, exp, type, strike: parseInt(k, 10) / 1000};
+}
+async function scanFlow(silent) {
+  const btn = $('flow-refresh');
+  const tickers = [...new Set($('flow-watchlist').value.toUpperCase().split(/[,\s]+/).filter(Boolean))].slice(0, 15);
+  store.set('watchlist', tickers.join(','));
+  if (!silent) { btn.disabled = true; setMsg('flow-msg', ''); setLoading('flow-table', `Fetching chains for ${tickers.length} tickers…`); }
+  const minVol = +$('flow-minvol').value || 0;
+  const minNotional = +$('flow-minnotional').value;
+  const minVolOI = +$('flow-minvoloi').value;
+  const side = $('flow-side').value;
+  const fails = [];
+  let feedTime = '';
+  const results = await pool(tickers, async t => {
+    const cboeSym = INDEX_MAP[t] || t;
+    try {
+      const j = await fetchJSON(`https://cdn.cboe.com/api/global/delayed_quotes/options/${cboeSym}.json`);
+      feedTime = j.timestamp || feedTime;
+      const spot = j.data.current_price ?? j.data.close ?? j.data.prev_day_close ?? null;
+      return (j.data.options || []).map(o => {
+        const p = parseOptionSymbol(o.option); if (!p) return null;
+        const vol = o.volume || 0;
+        const price = o.last_trade_price || (o.bid && o.ask ? (o.bid + o.ask) / 2 : 0);
+        const notional = vol * price * 100;
+        const oi = o.open_interest || 0;
+        const volOI = oi > 0 ? vol / oi : (vol > 0 ? 999 : 0);
+        const dte = Math.max(0, Math.round((new Date(p.exp) - Date.now()) / 864e5));
+        return {ticker: t, type: p.type, strike: p.strike, exp: p.exp, dte, vol, oi, volOI,
+                price, notional, iv: o.iv || 0, delta: o.delta || 0, spot,
+                otm: spot == null ? null : (p.type === 'C' ? p.strike > spot : p.strike < spot),
+                lastTrade: o.last_trade_time || ''};
+      }).filter(Boolean);
+    } catch(e) { fails.push(t); return []; }
+  }, 6);
+  if (silent && fails.length === tickers.length && flowState.rows.length) {
+    $('clock').textContent = 'Auto-refresh failed at ' + new Date().toLocaleTimeString() + ' — showing last data';
+    return;
+  }
+  let rows = results.flat().filter(r =>
+    r.vol >= minVol && r.notional >= minNotional && r.volOI >= minVolOI &&
+    (side === 'all' || r.type === side));
+  flowState.rows = rows;
+  const callPrem = rows.filter(r => r.type === 'C').reduce((s, r) => s + r.notional, 0);
+  const putPrem = rows.filter(r => r.type === 'P').reduce((s, r) => s + r.notional, 0);
+  const byTicker = {};
+  rows.forEach(r => byTicker[r.ticker] = (byTicker[r.ticker] || 0) + r.notional);
+  const topTicker = Object.entries(byTicker).sort((a, b) => b[1] - a[1])[0];
+  const pct = callPrem + putPrem > 0 ? Math.round(100 * callPrem / (callPrem + putPrem)) : 50;
+  $('flow-stats').innerHTML = `
+    <div class="stat"><div class="k">Whale prints</div><div class="v accent">${fmtN(rows.length)}</div></div>
+    <div class="stat"><div class="k">Call premium</div><div class="v green">${fmt$(callPrem)}</div></div>
+    <div class="stat"><div class="k">Put premium</div><div class="v red">${fmt$(putPrem)}</div></div>
+    <div class="stat"><div class="k">Call share ${pct}%</div>
+      <div class="ratiobar"><div class="c" style="width:${pct}%"></div><div class="p" style="width:${100-pct}%"></div></div></div>
+    <div class="stat"><div class="k">Top ticker</div><div class="v">${topTicker ? esc(topTicker[0]) + ' <span class="dim" style="font-size:13px">' + fmt$(topTicker[1]) + '</span>' : '—'}</div></div>`;
+  if (fails.length && !silent) {
+    setMsg('flow-msg', fails.length === tickers.length
+      ? 'CBOE blocks direct browser requests, and the relay fallback also failed. Close this tab and double-click <b>Start Whale Tracker.command</b> (in the same folder) — it opens this dashboard through a local server that fetches CBOE data reliably.'
+      : `No CBOE data for: ${esc(fails.join(', '))} (unlisted or bad symbol)`, 'err');
+  }
+  renderFlow();
+  $('clock').textContent = 'Feed: ' + (feedTime || '?') + ' ET (delayed 15m) · updated ' + new Date().toLocaleTimeString();
+  /* staleness guard: CBOE's CDN occasionally serves old snapshots — surface it loudly */
+  const ageDays = feedTime ? (Date.now() - new Date(feedTime.replace(' ', 'T')).getTime()) / 864e5 : null;
+  if (ageDays != null && ageDays > 5) {
+    $('flow-msg').insertAdjacentHTML('afterbegin',
+      `<div class="msg err">⚠ CBOE feed timestamp is ~${Math.round(ageDays)} days old (${esc(feedTime)} ET). Treat this options data as stale.</div>`);
+  }
+  btn.disabled = false;
+}
+function renderFlow() {
+  if (!flowState.rows.length) { $('flow-table').innerHTML = '<div class="loading">No contracts match the filters — try lowering min notional or Vol/OI</div>'; return; }
+  sortable($('flow-table'), flowState.rows, r => `
+    <tr>
+      <td class="l"><b>${esc(r.ticker)}</b></td>
+      <td class="l"><span class="tag ${r.type === 'C' ? 'call' : 'put'}">${r.type === 'C' ? 'CALL' : 'PUT'}</span></td>
+      <td>${r.strike}</td>
+      <td class="l">${r.exp} <span class="dim">(${r.dte}d)</span></td>
+      <td>${r.price.toFixed(2)}</td>
+      <td>${fmtN(r.vol)}</td>
+      <td>${fmtN(r.oi)}</td>
+      <td class="${r.volOI >= 3 ? 'amber' : ''}">${r.volOI >= 999 ? '∞' : r.volOI.toFixed(1)}×</td>
+      <td><b class="${r.type === 'C' ? 'green' : 'red'}">${fmt$(r.notional)}</b></td>
+      <td>${(r.iv * 100).toFixed(0)}%</td>
+      <td>${r.delta.toFixed(2)}</td>
+      <td class="l dim">${r.otm == null ? '—' : r.otm ? 'OTM' : 'ITM'}</td>
+    </tr>`,
+    [{key:'ticker',label:'Ticker',left:1},{key:'type',label:'Side',left:1},{key:'strike',label:'Strike'},
+     {key:'exp',label:'Expiry',left:1},{key:'price',label:'Price'},{key:'vol',label:'Volume'},
+     {key:'oi',label:'OI'},{key:'volOI',label:'Vol/OI'},{key:'notional',label:'Notional'},
+     {key:'iv',label:'IV'},{key:'delta',label:'Delta'},{key:'otm',label:'Money',left:1}],
+    flowState.sort);
+}
+$('flow-refresh').onclick = () => scanFlow();
+['flow-minvol','flow-minnotional','flow-minvoloi','flow-side'].forEach(id => $(id).onchange = () => { if (flowState.rows.length) scanFlow(); });
+</script>
+<script>
+/* ================= INSTITUTIONS — SEC EDGAR 13F ================= */
+const FUNDS = [
+  ['Berkshire Hathaway', 1067983], ['Citadel Advisors', 1423053], ['Renaissance Tech', 1037389],
+  ['Bridgewater', 1350694], ['Pershing Square', 1336528], ['Scion (Burry)', 1649339],
+  ['ARK Invest', 1697748], ['Duquesne (Druckenmiller)', 1536411], ['Tiger Global', 1167483],
+  ['Third Point', 1040273], ['Baupost', 1061768], ['Soros Fund Mgmt', 1029160]
+];
+const instState = {sort: {key: 'value', dir: -1}};
+$('fund-grid').innerHTML = FUNDS.map(([n, c]) =>
+  `<div class="fund" data-cik="${c}">${esc(n)}</div>`).join('');
+document.querySelectorAll('.fund').forEach(f => f.onclick = () => {
+  document.querySelectorAll('.fund').forEach(x => x.classList.remove('active'));
+  f.classList.add('active'); load13F(f.dataset.cik);
+});
+$('inst-load').onclick = () => { const v = $('inst-cik').value.replace(/\D/g, ''); if (v) load13F(v); };
+
+const xmlChildren = (el, name) => [...el.getElementsByTagName('*')].filter(e => e.localName === name);
+const xmlVal = (el, name) => { const n = xmlChildren(el, name)[0]; return n ? n.textContent.trim() : ''; };
+
+async function load13F(cik) {
+  setMsg('inst-msg', ''); $('inst-stats').innerHTML = '';
+  setLoading('inst-table', 'Loading latest 13F from EDGAR…');
+  try {
+    const cik10 = String(cik).padStart(10, '0');
+    const sub = await fetchJSON(`https://data.sec.gov/submissions/CIK${cik10}.json`);
+    const r = sub.filings.recent;
+    let idx = -1;
+    for (let i = 0; i < r.form.length; i++) if (r.form[i] === '13F-HR') { idx = i; break; }
+    if (idx < 0) throw new Error('No 13F-HR found for this CIK — is it an institutional manager?');
+    const adsh = r.accessionNumber[idx], filed = r.filingDate[idx], period = r.reportDate[idx];
+    const dir = `https://www.sec.gov/Archives/edgar/data/${parseInt(cik, 10)}/${adsh.replace(/-/g, '')}`;
+    const index = await fetchJSON(`${dir}/index.json`);
+    const files = (index.directory.item || []).filter(f => /\.xml$/i.test(f.name) && !/primary_doc/i.test(f.name));
+    const info = files.find(f => /info/i.test(f.name)) || files.sort((a, b) => (b.size || 0) - (a.size || 0))[0];
+    if (!info) throw new Error('No holdings table found in filing');
+    const xml = new DOMParser().parseFromString(await fetchJSON(`${dir}/${info.name}`, {text: true}), 'text/xml');
+    const tables = [...xml.getElementsByTagName('*')].filter(e => e.localName === 'infoTable');
+    if (!tables.length) throw new Error('Could not parse holdings XML');
+    const agg = {};
+    let total = 0;
+    tables.forEach(t => {
+      const name = xmlVal(t, 'nameOfIssuer'), pc = xmlVal(t, 'putCall');
+      const value = +xmlVal(t, 'value') || 0;
+      const shares = +xmlVal(t, 'sshPrnamt') || 0;
+      const k = name + '|' + pc;
+      agg[k] = agg[k] || {issuer: name, pc, value: 0, shares: 0};
+      agg[k].value += value; agg[k].shares += shares; total += value;
+    });
+    const rows = Object.values(agg).map(h => ({...h, pct: total ? 100 * h.value / total : 0}))
+      .sort((a, b) => b.value - a.value).slice(0, 30);
+    $('inst-stats').innerHTML = `
+      <div class="stat"><div class="k">Fund</div><div class="v" style="font-size:14px">${esc(sub.name)}</div></div>
+      <div class="stat"><div class="k">Portfolio value</div><div class="v accent">${fmt$(total)}</div></div>
+      <div class="stat"><div class="k">Positions</div><div class="v">${fmtN(tables.length)}</div></div>
+      <div class="stat"><div class="k">Period / Filed</div><div class="v" style="font-size:14px">${esc(period)} <span class="dim">/ ${esc(filed)}</span></div></div>`;
+    instState.rows = rows;
+    sortable($('inst-table'), rows, h => `
+      <tr>
+        <td class="l"><b>${esc(h.issuer)}</b>${h.pc ? ` <span class="tag ${h.pc.toLowerCase().includes('put') ? 'put' : 'call'}">${esc(h.pc.toUpperCase())}</span>` : ''}</td>
+        <td>${fmtN(h.shares)}</td>
+        <td><b>${fmt$(h.value)}</b></td>
+        <td>${h.pct.toFixed(1)}%<div class="ratiobar" style="width:80px;display:inline-flex;margin-left:8px;vertical-align:middle"><div class="c" style="width:${Math.min(100, h.pct * 2)}%"></div></div></td>
+      </tr>`,
+      [{key:'issuer',label:'Issuer',left:1},{key:'shares',label:'Shares'},{key:'value',label:'Value'},{key:'pct',label:'% of portfolio'}],
+      instState.sort);
+    $('inst-foot').innerHTML =
+      `Top 30 of ${tables.length} positions · <a href="${dir}" target="_blank" rel="noopener">raw filing on EDGAR</a>`;
+  } catch(e) {
+    $('inst-table').innerHTML = '<div class="loading">—</div>';
+    setMsg('inst-msg', 'Failed: ' + esc(e.message), 'err');
+  }
+}
+
+/* ================= INSIDERS — SEC EDGAR Form 4 ================= */
+const insState = {all: [], sort: {key: 'value', dir: -1}};
+const CODE_LABEL = {P: 'BUY', S: 'SELL', A: 'GRANT', M: 'EXERCISE', F: 'TAX', G: 'GIFT', D: 'DISPOSAL', C: 'CONVERT', X: 'EXERCISE'};
+
+async function fetchForm4List(count) {
+  const today = new Date(), start = new Date(Date.now() - 5 * 864e5);
+  const d = x => x.toISOString().slice(0, 10);
+  const pages = Math.ceil(count / 10);
+  const urls = Array.from({length: pages}, (_, i) =>
+    `https://efts.sec.gov/LATEST/search-index?q=&forms=4&dateRange=custom&startdt=${d(start)}&enddt=${d(today)}&from=${i * 10}`);
+  const results = await pool(urls, u => fetchJSON(u), 4);
+  const seen = new Set(), out = [];
+  for (const r of results) {
+    if (!r || !r.hits) continue;
+    for (const h of r.hits.hits) {
+      const s = h._source, adsh = s.adsh;
+      if (seen.has(adsh)) continue;
+      seen.add(adsh);
+      out.push({adsh, cik: s.ciks[s.ciks.length - 1], fileDate: s.file_date, docId: h._id.split(':')[1] || ''});
+    }
+  }
+  return out.sort((a, b) => b.fileDate.localeCompare(a.fileDate)).slice(0, count);
+}
+async function parseForm4(f) {
+  const dir = `https://www.sec.gov/Archives/edgar/data/${parseInt(f.cik, 10)}/${f.adsh.replace(/-/g, '')}`;
+  let docName = /\.xml$/i.test(f.docId) ? f.docId : null;
+  if (!docName) {
+    const index = await fetchJSON(`${dir}/index.json`);
+    const x = (index.directory.item || []).find(i => /\.xml$/i.test(i.name));
+    if (!x) return null; docName = x.name;
+  }
+  const xml = new DOMParser().parseFromString(await fetchJSON(`${dir}/${docName}`, {text: true}), 'text/xml');
+  const ticker = xmlVal(xml, 'issuerTradingSymbol'), company = xmlVal(xml, 'issuerName');
+  const owner = xmlVal(xml, 'rptOwnerName');
+  const title = xmlVal(xml, 'officerTitle') ||
+    (xmlVal(xml, 'isDirector') === '1' || /true/i.test(xmlVal(xml, 'isDirector')) ? 'Director' : '') ||
+    (xmlVal(xml, 'isTenPercentOwner') === '1' || /true/i.test(xmlVal(xml, 'isTenPercentOwner')) ? '10% owner' : '');
+  const byCode = {};
+  [...xml.getElementsByTagName('*')].filter(e => e.localName === 'nonDerivativeTransaction').forEach(tx => {
+    const code = xmlVal(tx, 'transactionCode') || '?';
+    const shares = +xmlVal(tx, 'transactionShares') || 0;
+    const price = +xmlVal(tx, 'transactionPricePerShare') || 0;
+    const date = xmlVal(tx, 'transactionDate').slice(0, 10);
+    const b = byCode[code] = byCode[code] || {shares: 0, value: 0, date};
+    b.shares += shares; b.value += shares * price;
+  });
+  return Object.entries(byCode).map(([code, b]) => ({
+    ticker, company, owner, title, code, label: CODE_LABEL[code] || code,
+    shares: b.shares, value: b.value, avg: b.shares ? b.value / b.shares : 0,
+    date: b.date, fileDate: f.fileDate,
+    url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${f.cik}&type=4`,
+    filingUrl: dir
+  }));
+}
+async function fetchInsiders(silent) {
+  const btn = $('ins-refresh');
+  const count = +$('ins-count').value;
+  if (!silent) { btn.disabled = true; setMsg('ins-msg', ''); $('ins-stats').innerHTML = ''; setLoading('ins-table', 'Fetching latest Form 4 list from EDGAR…'); }
+  try {
+    const list = await fetchForm4List(count);
+    if (!list.length) throw new Error('EDGAR returned no recent Form 4 filings');
+    let rows = [];
+    await pool(list, async f => {
+      const parsed = await parseForm4(f);
+      if (parsed) rows.push(...parsed);
+    }, 4, (done, total) => { if (!silent) setLoading('ins-table', `Parsing filings… ${done}/${total}`); });
+    insState.all = rows;
+    renderInsiders();
+  } catch(e) {
+    if (!silent) {
+      $('ins-table').innerHTML = '<div class="loading">—</div>';
+      setMsg('ins-msg', 'Failed: ' + esc(e.message), 'err');
+    }
+  }
+  btn.disabled = false;
+}
+function renderInsiders() {
+  const minVal = +$('ins-minval').value, type = $('ins-type').value;
+  const rows = insState.all.filter(r => r.value >= minVal && (type === 'all' || r.code === type));
+  const buys = insState.all.filter(r => r.code === 'P').reduce((s, r) => s + r.value, 0);
+  const sells = insState.all.filter(r => r.code === 'S').reduce((s, r) => s + r.value, 0);
+  $('ins-stats').innerHTML = `
+    <div class="stat"><div class="k">Filings parsed</div><div class="v accent">${fmtN(new Set(insState.all.map(r => r.filingUrl)).size)}</div></div>
+    <div class="stat"><div class="k">Open-market buys</div><div class="v green">${fmt$(buys)}</div></div>
+    <div class="stat"><div class="k">Sales</div><div class="v red">${fmt$(sells)}</div></div>
+    <div class="stat"><div class="k">Rows shown</div><div class="v">${fmtN(rows.length)}</div></div>`;
+  if (!rows.length) { $('ins-table').innerHTML = '<div class="loading">No transactions match — try "All transactions" or a lower minimum (many filings are grants/exercises)</div>'; return; }
+  sortable($('ins-table'), rows, r => `
+    <tr>
+      <td class="l"><b>${esc(r.ticker)}</b></td>
+      <td class="l">${esc(r.company)}</td>
+      <td class="l">${esc(r.owner)}<div class="dim" style="font-size:11px">${esc(r.title)}</div></td>
+      <td class="l"><span class="tag ${r.code === 'P' ? 'buy' : r.code === 'S' ? 'sell' : 'other'}">${r.label}</span></td>
+      <td>${fmtN(r.shares)}</td>
+      <td>${r.avg ? r.avg.toFixed(2) : '—'}</td>
+      <td><b class="${r.code === 'P' ? 'green' : r.code === 'S' ? 'red' : ''}">${fmt$(r.value)}</b></td>
+      <td class="l">${esc(r.date)}</td>
+      <td class="l"><a href="${r.filingUrl}" target="_blank" rel="noopener">filing</a></td>
+    </tr>`,
+    [{key:'ticker',label:'Ticker',left:1},{key:'company',label:'Company',left:1},{key:'owner',label:'Insider',left:1},
+     {key:'code',label:'Type',left:1},{key:'shares',label:'Shares'},{key:'avg',label:'Avg px'},
+     {key:'value',label:'Value'},{key:'date',label:'Trade date',left:1},{key:'filingUrl',label:'Link',left:1}],
+    insState.sort);
+}
+$('ins-refresh').onclick = () => fetchInsiders();
+['ins-minval','ins-type'].forEach(id => $(id).onchange = () => { if (insState.all.length) renderInsiders(); });
+</script>
+<script>
+/* ================= CONGRESS — Finnhub ================= */
+const cgState = {sort: {key: 'transactionDate', dir: -1}};
+$('cg-key').value = store.get('finnhub', '');
+$('cg-watchlist').value = store.get('cg_watchlist', 'NVDA,AAPL,MSFT,TSLA,META');
+
+async function fetchCongress(silent) {
+  const key = $('cg-key').value.trim();
+  if (!key) { setMsg('cg-msg', 'A free Finnhub API key is required — get one at <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a>', 'err'); return; }
+  store.set('finnhub', key);
+  const tickers = [...new Set($('cg-watchlist').value.toUpperCase().split(/[,\s]+/).filter(Boolean))].slice(0, 10);
+  store.set('cg_watchlist', tickers.join(','));
+  const btn = $('cg-refresh');
+  if (!silent) { btn.disabled = true; setMsg('cg-msg', ''); setLoading('cg-table', `Fetching congressional trades for ${tickers.length} tickers…`); }
+  try {
+    const results = await pool(tickers, async t => {
+      const j = await fetchJSON(`https://finnhub.io/api/v1/stock/congressional-trading?symbol=${t}&token=${encodeURIComponent(key)}`, {relay: false});
+      return (j.data || []).map(x => ({...x, symbol: x.symbol || t}));
+    }, 4);
+    const rows = results.flat().filter(Boolean).map(x => ({
+      symbol: x.symbol, name: x.name || '—',
+      type: x.transactionType || '—',
+      isBuy: /purchase|buy/i.test(x.transactionType || ''),
+      amountFrom: x.amountFrom || 0, amountTo: x.amountTo || 0,
+      transactionDate: x.transactionDate || '', filingDate: x.filingDate || '',
+      position: x.position || x.ownerType || ''
+    }));
+    rows.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
+    cgState.loaded = true;
+    if (!rows.length) { $('cg-table').innerHTML = '<div class="loading">No congressional trades returned for these tickers (or none disclosed recently)</div>'; btn.disabled = false; return; }
+    sortable($('cg-table'), rows.slice(0, 300), r => `
+      <tr>
+        <td class="l"><b>${esc(r.symbol)}</b></td>
+        <td class="l">${esc(r.name)}<div class="dim" style="font-size:11px">${esc(r.position)}</div></td>
+        <td class="l"><span class="tag ${r.isBuy ? 'buy' : 'sell'}">${esc(r.type)}</span></td>
+        <td>${fmt$(r.amountFrom)} – ${fmt$(r.amountTo)}</td>
+        <td class="l">${esc(r.transactionDate.slice(0, 10))}</td>
+        <td class="l dim">${esc(r.filingDate.slice(0, 10))}</td>
+      </tr>`,
+      [{key:'symbol',label:'Ticker',left:1},{key:'name',label:'Member',left:1},{key:'type',label:'Type',left:1},
+       {key:'amountTo',label:'Amount range'},{key:'transactionDate',label:'Trade date',left:1},{key:'filingDate',label:'Disclosed',left:1}],
+      cgState.sort);
+  } catch(e) {
+    if (!silent) {
+      $('cg-table').innerHTML = '<div class="loading">—</div>';
+      const hint = /403|401/.test(e.message) ? ' — key invalid, or this endpoint may need a higher Finnhub tier. Free fallback: <a href="https://www.quiverquant.com/congresstrading/" target="_blank" rel="noopener">QuiverQuant</a>' : '';
+      setMsg('cg-msg', 'Failed: ' + esc(e.message) + hint, 'err');
+    }
+  }
+  btn.disabled = false;
+}
+$('cg-refresh').onclick = () => fetchCongress();
+
+/* ================= AUTO-REFRESH =================
+   All fetches run straight from this browser to CBOE / SEC / Finnhub —
+   no middleman, no credits. Pauses while the tab is hidden. */
+const AR = {timer: null, busy: false};
+$('auto-refresh').value = store.get('autorefresh', '5');
+function armAutoRefresh() {
+  clearInterval(AR.timer);
+  const mins = +$('auto-refresh').value;
+  store.set('autorefresh', String(mins));
+  if (!mins) return;
+  AR.timer = setInterval(async () => {
+    if (document.hidden || AR.busy) return;
+    AR.busy = true;
+    try {
+      const active = document.querySelector('.tab.active').dataset.panel;
+      if (active === 'flow') await scanFlow(true);
+      else if (active === 'insider' && insState.all.length) await fetchInsiders(true);
+      else if (active === 'congress' && $('cg-key').value.trim() && cgState.loaded) await fetchCongress(true);
+      /* 13F tab skipped — filings are quarterly, nothing changes intraday */
+    } catch(e) {} finally { AR.busy = false; }
+  }, mins * 60000);
+}
+$('auto-refresh').onchange = armAutoRefresh;
+armAutoRefresh();
+/* populate the page on open — no button press needed */
+window.addEventListener('load', () => setTimeout(() => scanFlow(), 250));
+</script>
+<script>
+/* ================= CONFLUENCE ENGINE =================
+   Scores each ticker on how strongly independent whale signals align.
+   Weights (documented in the panel footer): options 35, insiders 30,
+   institutions 20, congress 15. Score is normalized to the sources
+   actually available, so a missing Finnhub key doesn't deflate scores. */
+const confState = {sort: {key: 'score', dir: -1}, f13Index: null, nameByTicker: null, rows: []};
+$('conf-watchlist').value = store.get('watchlist', 'SPY,QQQ,NVDA,TSLA,AAPL,MSFT,META,AMD');
+
+/* normalize company names so 13F issuer names match SEC ticker titles:
+   "NVIDIA CORPORATION" / "NVIDIA CORP" -> "NVIDIA" */
+const normName = s => String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ')
+  .replace(/\b(INCORPORATED|INC|CORPORATION|CORP|COMPANY|PLC|LTD|LP|LLC|HOLDINGS?|GROUP|TRUST|CL|CLASS|COM|NEW|DEL|SA|NV|ADR?|ETF)\b/g, ' ')
+  .replace(/\b[A-Z]\b/g, ' ').replace(/\s+/g, ' ').trim();
+
+async function loadTickerNames(tickers) {
+  if (confState.nameByTicker) return confState.nameByTicker;
+  const j = await fetchJSON('https://www.sec.gov/files/company_tickers.json');
+  const map = {};
+  for (const k in j) {
+    const t = j[k].ticker.toUpperCase();
+    if (tickers.includes(t)) map[t] = normName(j[k].title);
+  }
+  return confState.nameByTicker = map;
+}
+
+/* -------- 13F index: normalized issuer name -> holdings by the 12 funds -------- */
+const tagVal = (block, tag) => {
+  const m = new RegExp('<(?:\\w+:)?' + tag + '>\\s*([^<]*)', 'i').exec(block);
+  return m ? m[1].trim() : '';
+};
+async function fetch13FHoldings(cik, accession) {
+  const dir = `https://www.sec.gov/Archives/edgar/data/${parseInt(cik, 10)}/${accession.replace(/-/g, '')}`;
+  const fIndex = await fetchJSON(`${dir}/index.json`);
+  const files = (fIndex.directory.item || []).filter(f => /\.xml$/i.test(f.name) && !/primary_doc/i.test(f.name));
+  const info = files.find(f => /info/i.test(f.name)) || files.sort((a, b) => (b.size || 0) - (a.size || 0))[0];
+  if (!info) return null;
+  const xml = await fetchJSON(`${dir}/${info.name}`, {text: true, timeout: 90000});
+  const blocks = xml.match(/<(?:\w+:)?infoTable\b[\s\S]*?<\/(?:\w+:)?infoTable>/g) || [];
+  const holdings = new Map(); // normName|putCall -> value
+  for (const b of blocks) {
+    const key = normName(tagVal(b, 'nameOfIssuer'));
+    if (!key) continue;
+    const pc = (tagVal(b, 'putCall') || '').toLowerCase();
+    const k = key + '|' + pc;
+    holdings.set(k, (holdings.get(k) || 0) + (+tagVal(b, 'value') || 0));
+  }
+  return holdings;
+}
+async function build13FIndex(onProgress) {
+  if (confState.f13Index) return confState.f13Index;
+  const index = new Map();
+  let done = 0;
+  await pool(FUNDS, async ([fundName, cik]) => {
+    try {
+      const cik10 = String(cik).padStart(10, '0');
+      const sub = await fetchJSON(`https://data.sec.gov/submissions/CIK${cik10}.json`);
+      const r = sub.filings.recent;
+      const f13 = [];
+      for (let i = 0; i < r.form.length && f13.length < 2; i++)
+        if (r.form[i] === '13F-HR') f13.push({acc: r.accessionNumber[i], period: r.reportDate[i]});
+      if (!f13.length) return;
+      const cur = await fetch13FHoldings(cik, f13[0].acc);
+      if (!cur) return;
+      let prev = null;
+      if (f13[1]) { try { prev = await fetch13FHoldings(cik, f13[1].acc); } catch (e) {} }
+      const allKeys = new Set([...cur.keys(), ...(prev ? prev.keys() : [])]);
+      for (const k of allKeys) {
+        const [key, pc] = k.split('|');
+        const v = cur.get(k) || 0, pv = prev ? (prev.get(k) || 0) : null;
+        let change = 'HELD';
+        if (pv != null) {
+          if (!pv && v) change = 'NEW';
+          else if (pv && !v) change = 'EXITED';
+          else if (v > pv * 1.25) change = 'ADDED';
+          else if (v < pv * 0.75) change = 'TRIMMED';
+        }
+        if (!v && change !== 'EXITED') continue;
+        const rec = {fund: fundName, period: f13[0].period, value: v, prevValue: pv, change, putCall: pc};
+        if (!index.has(key)) index.set(key, []);
+        index.get(key).push(rec);
+      }
+    } catch (e) { /* fund failed — skip, coverage note handles it */ }
+    finally { done++; if (onProgress) onProgress(done, FUNDS.length); }
+  }, 3);
+  return confState.f13Index = index;
+}
+
+/* -------- per-ticker insider scan (Form 4 over lookback) -------- */
+async function insiderScan(ticker, days) {
+  const d = x => x.toISOString().slice(0, 10);
+  const start = new Date(Date.now() - days * 864e5), today = new Date();
+  const seen = new Set(), filings = [];
+  for (const from of [0, 10]) {
+    try {
+      const j = await fetchJSON(`https://efts.sec.gov/LATEST/search-index?q=%22${ticker}%22&forms=4&dateRange=custom&startdt=${d(start)}&enddt=${d(today)}&from=${from}`);
+      for (const h of (j.hits && j.hits.hits) || []) {
+        const s = h._source;
+        if (seen.has(s.adsh)) continue;
+        seen.add(s.adsh);
+        filings.push({adsh: s.adsh, cik: s.ciks[s.ciks.length - 1], fileDate: s.file_date, docId: h._id.split(':')[1] || ''});
+      }
+      if (((j.hits || {}).total || {}).value <= from + 10) break;
+    } catch (e) { break; }
+  }
+  filings.sort((a, b) => b.fileDate.localeCompare(a.fileDate));
+  const out = {buyVal: 0, sellVal: 0, buyers: new Set(), sellers: new Set(), filings: 0};
+  const parsed = await pool(filings.slice(0, 8), f => parseForm4(f).catch(() => null), 4);
+  for (const rows of parsed) {
+    if (!rows) continue;
+    const mine = rows.filter(r => (r.ticker || '').toUpperCase() === ticker);
+    if (mine.length) out.filings++;
+    for (const r of mine) {
+      if (r.code === 'P') { out.buyVal += r.value; out.buyers.add(r.owner); }
+      if (r.code === 'S') { out.sellVal += r.value; out.sellers.add(r.owner); }
+    }
+  }
+  return out;
+}
+
+/* -------- per-ticker congress scan -------- */
+async function congressScan(ticker, days, key) {
+  const j = await fetchJSON(`https://finnhub.io/api/v1/stock/congressional-trading?symbol=${ticker}&token=${encodeURIComponent(key)}`, {relay: false});
+  const cutoff = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+  let buys = 0, sells = 0, amt = 0;
+  for (const x of (j.data || [])) {
+    if ((x.transactionDate || '') < cutoff) continue;
+    const isBuy = /purchase|buy/i.test(x.transactionType || '');
+    if (isBuy) buys++; else sells++;
+    amt += ((x.amountFrom || 0) + (x.amountTo || 0)) / 2;
+  }
+  return {buys, sells, amt};
+}
+
+/* -------- scoring + cross-examination -------- */
+function scoreComponents(c) {
+  const comps = {};
+  { let s = 0, dir = 0;
+    const total = c.flow.call + c.flow.put;
+    if (total > 0) { s = Math.min(35, 12 * Math.log10(1 + total / 25e4)); dir = (c.flow.call - c.flow.put) / total; }
+    comps.flow = {s, dir, max: 35}; }
+  { let s = 0, dir = 0;
+    const B = c.ins.buyVal, S = c.ins.sellVal;
+    if (B > 0) s += Math.min(24, c.ins.buyers.size * 7 + 6 * Math.log10(1 + B / 1e5));
+    if (S > 0) s += Math.min(8, 3 * Math.log10(1 + S / 1e6));
+    if (B + S > 0) dir = (B - S) / (B + S);
+    comps.ins = {s: Math.min(30, s), dir, max: 30}; }
+  const held = c.inst ? c.inst.filter(h => h.value > 0) : [];
+  if (c.inst) { let s = 0, dir = 0;
+    const longV = held.filter(h => !h.putCall || h.putCall === 'call').reduce((a, h) => a + h.value, 0);
+    const putV = held.filter(h => h.putCall === 'put').reduce((a, h) => a + h.value, 0);
+    const funds = new Set(held.map(h => h.fund)).size;
+    if (funds) { s = Math.min(20, funds * 6 + 2 * Math.log10(1 + (longV + putV) / 1e6)); dir = (longV - putV) / (longV + putV || 1); }
+    comps.inst = {s, dir, max: 20}; }
+  if (c.cg) { let s = 0, dir = 0;
+    const n = c.cg.buys + c.cg.sells;
+    if (n) { s = Math.min(15, 4 * n + Math.log10(1 + c.cg.amt / 1e4)); dir = (c.cg.buys - c.cg.sells) / n; }
+    comps.cg = {s, dir, max: 15}; }
+  const list = Object.values(comps);
+  const raw = list.reduce((a, x) => a + x.s, 0);
+  const maxAvail = list.reduce((a, x) => a + x.max, 0);
+  const wDir = raw > 0 ? list.reduce((a, x) => a + x.dir * x.s, 0) / raw : 0;
+  const active = list.filter(x => x.s >= 5).length;
+
+  /* cross-examination: hunt for evidence AGAINST the prevailing direction.
+     Deductions are bounded (20 pts) and every one is itemized in the UI. */
+  const counter = {pts: 0, notes: []};
+  const add = (pts, note) => { counter.pts += pts; counter.notes.push(note + ` (−${pts.toFixed(0)})`); };
+  const total = c.flow.call + c.flow.put;
+  if (wDir > 0) {
+    if (c.ins.sellers.size) add(Math.min(8, 2 * c.ins.sellers.size + 2 * Math.log10(1 + c.ins.sellVal / 1e6)),
+      `${c.ins.sellers.size} insider sale${c.ins.sellers.size === 1 ? '' : 's'} ${fmt$(c.ins.sellVal)}`);
+    const putV = held.filter(h => h.putCall === 'put').reduce((a, h) => a + h.value, 0);
+    if (putV > 0) add(Math.min(8, 3 + 2 * Math.log10(1 + putV / 1e6)),
+      `fund put positions ${fmt$(putV)} [${[...new Set(held.filter(h => h.putCall === 'put').map(h => h.fund))].join(', ')}]`);
+    const cuts = c.inst ? c.inst.filter(h => h.change === 'TRIMMED' || h.change === 'EXITED') : [];
+    if (cuts.length) add(Math.min(6, 3 * cuts.length),
+      cuts.map(h => `${h.fund} ${h.change.toLowerCase()}`).join(', '));
+    if (total > 0 && c.flow.put / total > 0.35) add(Math.min(5, 5 * (c.flow.put / total - 0.35) / 0.3),
+      `puts are ${Math.round(100 * c.flow.put / total)}% of whale premium`);
+  } else if (wDir < 0) {
+    if (c.ins.buyers.size) add(Math.min(8, 2 * c.ins.buyers.size + 2 * Math.log10(1 + c.ins.buyVal / 1e6)),
+      `${c.ins.buyers.size} insider buy${c.ins.buyers.size === 1 ? '' : 's'} ${fmt$(c.ins.buyVal)}`);
+    const adds = c.inst ? c.inst.filter(h => (h.change === 'NEW' || h.change === 'ADDED') && (!h.putCall || h.putCall === 'call')) : [];
+    if (adds.length) add(Math.min(6, 3 * adds.length),
+      adds.map(h => `${h.fund} ${h.change.toLowerCase()}`).join(', '));
+    if (total > 0 && c.flow.call / total > 0.35) add(Math.min(5, 5 * (c.flow.call / total - 0.35) / 0.3),
+      `calls are ${Math.round(100 * c.flow.call / total)}% of whale premium`);
+  }
+  counter.pts = Math.min(20, counter.pts);
+  const adjRaw = Math.max(0, raw - counter.pts);
+  return {comps, score: Math.round(100 * raw / maxAvail), adjScore: Math.round(100 * adjRaw / maxAvail),
+          dir: wDir, active, counter};
+}
+
+/* -------- market-implied odds (risk-neutral, from the whale's own contract) -------- */
+function cnd(x) {
+  const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741, a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+  const sg = x < 0 ? -1 : 1; x = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + p * x);
+  const y = 1 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * Math.exp(-x * x);
+  return 0.5 * (1 + sg * y);
+}
+function impliedOdds(pr) {
+  if (!pr || !pr.iv || !pr.spot || pr.dte <= 0 || !pr.price) return null;
+  const T = Math.max(pr.dte, 0.5) / 365, r = 0.04, sig = pr.iv;
+  const probAbove = K => cnd((Math.log(pr.spot / K) + (r - sig * sig / 2) * T) / (sig * Math.sqrt(T)));
+  const itm = pr.type === 'C' ? probAbove(pr.strike) : 1 - probAbove(pr.strike);
+  const be = pr.type === 'C' ? pr.strike + pr.price : pr.strike - pr.price;
+  const beProb = pr.type === 'C' ? probAbove(be) : 1 - probAbove(be);
+  return {itm, beProb, be};
+}
+
+async function runConfluence() {
+  const btn = $('conf-run'); btn.disabled = true;
+  setMsg('conf-msg', ''); $('conf-stats').innerHTML = '';
+  try {
+    const tickers = [...new Set($('conf-watchlist').value.toUpperCase().split(/[,\s]+/).filter(Boolean))].slice(0, 12);
+    const days = +$('conf-days').value;
+    const use13F = $('conf-13f').checked;
+    const cgKey = $('cg-key').value.trim();
+
+    setLoading('conf-table', 'Step 1/4 — options flow…');
+    if (!flowState.rows.length) await scanFlow(true);
+    const flowByT = {};
+    for (const t of tickers) flowByT[t] = {call: 0, put: 0, prints: 0, maxVolOI: 0};
+    for (const r of flowState.rows) {
+      const f = flowByT[r.ticker]; if (!f) continue;
+      f[r.type === 'C' ? 'call' : 'put'] += r.notional; f.prints++;
+      f.maxVolOI = Math.max(f.maxVolOI, r.volOI);
+    }
+
+    let f13 = null, names = null;
+    if (use13F) {
+      setLoading('conf-table', 'Step 2/4 — indexing 13F holdings of 12 funds…');
+      names = await loadTickerNames(tickers);
+      f13 = await build13FIndex((d, t) => setLoading('conf-table', `Step 2/4 — indexing 13F holdings… fund ${d}/${t}`));
+    }
+
+    const insByT = {};
+    let iDone = 0;
+    await pool(tickers, async t => {
+      insByT[t] = await insiderScan(t, days).catch(() => ({buyVal: 0, sellVal: 0, buyers: new Set(), sellers: new Set(), filings: 0}));
+      iDone++; setLoading('conf-table', `Step 3/4 — insider filings… ${iDone}/${tickers.length} tickers`);
+    }, 3);
+
+    const cgByT = {};
+    if (cgKey) {
+      let cDone = 0;
+      await pool(tickers, async t => {
+        cgByT[t] = await congressScan(t, days, cgKey).catch(() => null);
+        cDone++; setLoading('conf-table', `Step 4/4 — congress trades… ${cDone}/${tickers.length}`);
+      }, 4);
+    }
+
+    confState.rows = tickers.map(t => {
+      const inst = f13 && names && names[t] ? (f13.get(names[t]) || []) : (f13 ? [] : null);
+      const sc = scoreComponents({flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null});
+      const label = sc.dir > 0.2 ? 'BULLISH' : sc.dir < -0.2 ? 'BEARISH' : 'MIXED';
+      /* the whale's own contract supplies objective thesis parameters */
+      const prints = flowState.rows.filter(x => x.ticker === t).sort((a, b) => b.notional - a.notional);
+      const top1 = prints[0] || null;
+      const odds = top1 ? impliedOdds(top1) : null;
+      let thesis = null;
+      if (label !== 'MIXED' && sc.adjScore >= 15) {
+        const bull = label === 'BULLISH';
+        const horizon = sc.comps.ins.s >= Math.max(sc.comps.flow.s, 5) ? 30 : (sc.active >= 3 ? 21 : 14);
+        const spot = top1 ? top1.spot : null;
+        const protectiveStrike = top1 && spot && (bull ? top1.strike < spot : top1.strike > spot) ? top1.strike : null;
+        thesis = {
+          dir: bull ? 1 : -1, horizon,
+          claim: `${t} ${bull ? 'outperforms' : 'underperforms'} SPY over the next ${horizon} calendar days`,
+          invalidation: protectiveStrike
+            ? `${bull ? 'close below' : 'close above'} $${protectiveStrike} (the whale's own strike)`
+            : `${bull ? '−7%' : '+7%'} move against the thesis from entry`,
+          deadline: new Date(Date.now() + horizon * 864e5).toISOString().slice(0, 10)
+        };
+      }
+      return {ticker: t, score: sc.score, adjScore: sc.adjScore, counter: sc.counter,
+              dirLabel: label, dir: sc.dir, active: sc.active, thesis, odds, top1,
+              badge: sc.active >= 3 ? 'STRONG' : sc.active >= 2 ? 'CONFLUENCE' : '',
+              flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null,
+              flowS: sc.comps.flow.s, insS: sc.comps.ins.s,
+              instS: sc.comps.inst ? sc.comps.inst.s : -1, cgS: sc.comps.cg ? sc.comps.cg.s : -1};
+    });
+
+    const strong = confState.rows.filter(r => r.active >= 2).length;
+    const top = [...confState.rows].sort((a, b) => b.adjScore - a.adjScore)[0];
+    $('conf-stats').innerHTML = `
+      <div class="stat"><div class="k">Tickers scanned</div><div class="v accent">${tickers.length}</div></div>
+      <div class="stat"><div class="k">With confluence (2+ sources)</div><div class="v ${strong ? 'green' : ''}">${strong}</div></div>
+      <div class="stat"><div class="k">Top score</div><div class="v">${top ? esc(top.ticker) + ' <span class="dim" style="font-size:13px">' + top.adjScore + '/100</span>' : '—'}</div></div>
+      <div class="stat"><div class="k">Coverage</div><div class="v" style="font-size:13px">Options + Insiders${f13 ? ' + 13F' : ''}${cgKey ? ' + Congress' : ''}</div></div>`;
+    if (!f13 || !cgKey) setMsg('conf-msg',
+      (!f13 ? '13F scan disabled — institutions excluded from scores. ' : '') +
+      (!cgKey ? 'No Finnhub key — congress excluded from scores (add one in the Congress tab).' : ''), 'info');
+    renderConfluence();
+    resolveDue(); /* grade any theses whose deadline has passed */
+  } catch (e) {
+    $('conf-table').innerHTML = '<div class="loading">—</div>';
+    setMsg('conf-msg', 'Scan failed: ' + esc(e.message), 'err');
+  }
+  btn.disabled = false;
+}
+
+function renderConfluence() {
+  const cell = (s, max, detail) => s < 0
+    ? '<span class="dim">n/a</span>'
+    : `<b class="${s >= 5 ? 'accent' : 'dim'}">${s.toFixed(0)}</b><span class="dim">/${max}</span><div class="dim" style="font-size:11px">${detail}</div>`;
+  sortable($('conf-table'), confState.rows, r => {
+    const f = r.flow, i = r.ins;
+    const fDet = f.prints ? `${fmt$(f.call + f.put)} · ${Math.round(100 * f.call / (f.call + f.put || 1))}% calls · ${f.prints} prints` : 'no whale prints';
+    const iDet = (i.buyers.size || i.sellers.size)
+      ? `${i.buyers.size} buyer${i.buyers.size === 1 ? '' : 's'} ${fmt$(i.buyVal)} / ${i.sellers.size} seller${i.sellers.size === 1 ? '' : 's'} ${fmt$(i.sellVal)}` : 'no P/S filings';
+    const held = r.inst ? r.inst.filter(h => h.value > 0) : [];
+    const changes = r.inst ? r.inst.filter(h => h.change && h.change !== 'HELD') : [];
+    const nDet = r.inst == null ? '' : (held.length || changes.length
+      ? `${new Set(held.map(h => h.fund)).size} funds ${fmt$(held.reduce((a, h) => a + h.value, 0))}` +
+        (changes.length ? ' · ' + changes.map(h => `${h.fund.split(' ')[0]} ${h.change}`).join(', ') : '')
+      : 'not held');
+    const cDet = r.cg == null ? '' : (r.cg.buys + r.cg.sells ? `${r.cg.buys} buys / ${r.cg.sells} sells` : 'no trades');
+
+    /* row 2: thesis, market-implied odds, cross-examination */
+    let detail = '';
+    if (r.thesis) {
+      detail += `<b class="${r.thesis.dir > 0 ? 'green' : 'red'}">THESIS</b> ${esc(r.thesis.claim)} · invalidation: ${esc(r.thesis.invalidation)} · verdict due ${esc(r.thesis.deadline)}`;
+    } else {
+      detail += `<span class="dim">No directional thesis — ${r.dirLabel === 'MIXED' ? 'signals conflict' : 'signal too weak'} (nothing logged to ledger)</span>`;
+    }
+    if (r.odds && r.top1) {
+      detail += `<br><b class="accent">MARKET ODDS</b> biggest print (${esc(r.top1.type === 'C' ? 'CALL' : 'PUT')} $${r.top1.strike} ${esc(r.top1.exp)}): ` +
+        `options market prices ${Math.round(r.odds.itm * 100)}% chance ITM at expiry, ${Math.round(r.odds.beProb * 100)}% beyond the whale's $${r.odds.be.toFixed(0)} breakeven`;
+    }
+    if (r.counter.notes.length) {
+      detail += `<br><b class="amber">CROSS-EXAM</b> ${r.counter.notes.map(esc).join(' · ')}`;
+    } else if (r.thesis) {
+      detail += `<br><span class="dim">Cross-exam found no opposing evidence in available sources</span>`;
+    }
+    return `<tr>
+      <td class="l"><b>${esc(r.ticker)}</b></td>
+      <td><b style="font-size:15px">${r.adjScore}</b><span class="dim">/100</span>${r.counter.pts ? `<span class="amber" style="font-size:11px"> (${r.score} −${r.counter.pts.toFixed(0)})</span>` : ''}
+        <div class="ratiobar" style="width:90px"><div class="c" style="width:${r.adjScore}%"></div></div></td>
+      <td class="l"><span class="tag ${r.dirLabel === 'BULLISH' ? 'buy' : r.dirLabel === 'BEARISH' ? 'sell' : 'other'}">${r.dirLabel}</span></td>
+      <td class="l">${r.badge ? `<span class="tag ${r.badge === 'STRONG' ? 'buy' : 'other'}" style="${r.badge === 'STRONG' ? 'background:rgba(255,200,87,.15);color:var(--amber)' : ''}">${r.badge}</span>` : '<span class="dim">—</span>'}</td>
+      <td class="l">${cell(r.flowS, 35, fDet)}</td>
+      <td class="l">${cell(r.insS, 30, iDet)}</td>
+      <td class="l">${cell(r.instS, 20, nDet)}</td>
+      <td class="l">${cell(r.cgS, 15, cDet)}</td>
+    </tr>
+    <tr class="trow"><td colspan="8" class="l">${detail}</td></tr>`;
+  },
+  [{key:'ticker',label:'Ticker',left:1},{key:'adjScore',label:'Score'},{key:'dirLabel',label:'Direction',left:1},
+   {key:'active',label:'Confluence',left:1},{key:'flowS',label:'Options (35)',left:1},{key:'insS',label:'Insiders (30)',left:1},
+   {key:'instS',label:'Institutions (20)',left:1},{key:'cgS',label:'Congress (15)',left:1}],
+  confState.sort);
+}
+
+/* ================= THESIS LEDGER =================
+   Every logged thesis is a falsifiable claim with a deadline. At/after the
+   deadline it is resolved against actual prices, benchmarked to SPY, and the
+   dashboard's cumulative track record is displayed — including its misses. */
+function getLedger() { try { return JSON.parse(store.get('ledger', '[]')); } catch (e) { return []; } }
+function saveLedger(l) { store.set('ledger', JSON.stringify(l)); }
+async function spotOf(t) {
+  const j = await fetchJSON(`https://cdn.cboe.com/api/global/delayed_quotes/quotes/${INDEX_MAP[t] || t}.json`);
+  return j.data.current_price ?? j.data.close;
+}
+async function logScan() {
+  const eligible = confState.rows.filter(r => r.thesis);
+  if (!eligible.length) { setMsg('conf-msg', 'Nothing to log — no row produced a directional thesis.', 'info'); return; }
+  const ledger = getLedger();
+  const todo = eligible.filter(r =>
+    !ledger.some(x => x.status === 'pending' && x.ticker === r.ticker && x.dir === r.thesis.dir));
+  if (!todo.length) { setMsg('conf-msg', 'All current theses are already on the books (pending).', 'info'); return; }
+  const btn = $('conf-log'); btn.disabled = true;
+  try {
+    const spotSpy = await spotOf('SPY');
+    const spots = {};
+    await pool(todo.map(r => r.ticker), async t => { spots[t] = await spotOf(t).catch(() => null); }, 4);
+    let added = 0;
+    for (const r of todo) {
+      if (spots[r.ticker] == null) continue;
+      ledger.push({id: Date.now() + '-' + r.ticker, ticker: r.ticker, dir: r.thesis.dir,
+        claim: r.thesis.claim, invalidation: r.thesis.invalidation,
+        score: r.adjScore, badge: r.badge || 'SINGLE', active: r.active,
+        created: new Date().toISOString().slice(0, 10), deadline: r.thesis.deadline,
+        horizon: r.thesis.horizon, entrySpot: spots[r.ticker], entrySpy: spotSpy, status: 'pending'});
+      added++;
+    }
+    saveLedger(ledger);
+    setMsg('conf-msg', `Logged ${added} thesis${added === 1 ? '' : 'es'} with entry prices. The dashboard will grade them after their deadlines.`, 'info');
+    renderRecord();
+  } catch (e) { setMsg('conf-msg', 'Logging failed: ' + esc(e.message), 'err'); }
+  btn.disabled = false;
+}
+async function resolveDue() {
+  const ledger = getLedger();
+  const today = new Date().toISOString().slice(0, 10);
+  const due = ledger.filter(x => x.status === 'pending' && x.deadline <= today);
+  if (!due.length) { renderRecord(); return 0; }
+  const btn = $('conf-resolve'); if (btn) btn.disabled = true;
+  try {
+    const spotSpy = await spotOf('SPY');
+    const spots = {};
+    await pool([...new Set(due.map(x => x.ticker))], async t => { spots[t] = await spotOf(t).catch(() => null); }, 4);
+    for (const x of due) {
+      const s = spots[x.ticker];
+      if (s == null) continue;
+      const excess = (s / x.entrySpot - 1) - (spotSpy / x.entrySpy - 1);
+      x.exitSpot = s; x.exitSpy = spotSpy; x.excess = excess;
+      x.win = x.dir > 0 ? excess > 0 : excess < 0;
+      x.status = 'resolved'; x.resolvedAt = today;
+    }
+    saveLedger(ledger);
+  } catch (e) { /* leave pending; retry next time */ }
+  if (btn) btn.disabled = false;
+  renderRecord();
+  return due.length;
+}
+function renderRecord() {
+  const L = getLedger();
+  const pend = L.filter(x => x.status === 'pending');
+  const res = L.filter(x => x.status === 'resolved');
+  const wins = res.filter(x => x.win).length;
+  const avgX = res.length ? res.reduce((a, x) => a + x.excess, 0) / res.length : 0;
+  const strong = res.filter(x => x.badge === 'STRONG' || x.badge === 'CONFLUENCE');
+  const dueN = pend.filter(x => x.deadline <= new Date().toISOString().slice(0, 10)).length;
+  $('conf-record').innerHTML = `
+    <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+      <b>📓 Track record</b>
+      <span class="dim">Pending: <b class="accent">${pend.length}</b>${dueN ? ` <span class="amber">(${dueN} due)</span>` : ''}</span>
+      <span class="dim">Resolved: <b>${res.length}</b></span>
+      <span class="dim">Hit rate: <b class="${res.length && wins / res.length >= 0.5 ? 'green' : res.length ? 'red' : ''}">${res.length ? Math.round(100 * wins / res.length) + '%' : '—'}</b></span>
+      <span class="dim">Avg excess vs SPY: <b class="${avgX > 0 ? 'green' : avgX < 0 ? 'red' : ''}">${res.length ? (avgX * 100).toFixed(1) + '%' : '—'}</b></span>
+      <span class="dim">Confluence-backed: <b>${strong.length ? Math.round(100 * strong.filter(x => x.win).length / strong.length) + '%' : '—'}</b></span>
+      <span style="flex:1"></span>
+      <button id="conf-log">Log theses</button>
+      <button id="conf-resolve">Resolve due</button>
+      <button id="conf-export">Export CSV</button>
+    </div>
+    ${res.length === 0 && pend.length === 0 ? '<div class="dim" style="margin-top:6px;font-size:12px">Empty — run a scan, press "Log theses", and this dashboard starts keeping score on itself. Judge it on its record, not its confidence.</div>' : ''}`;
+  $('conf-log').onclick = logScan;
+  $('conf-resolve').onclick = resolveDue;
+  $('conf-export').onclick = () => {
+    const cols = ['created','ticker','dir','score','badge','active','horizon','deadline','entrySpot','entrySpy','status','resolvedAt','exitSpot','exitSpy','excess','win','claim','invalidation'];
+    const csv = [cols.join(',')].concat(getLedger().map(x =>
+      cols.map(c => `"${String(x[c] ?? '').replace(/"/g, '""')}"`).join(','))).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv'}));
+    a.download = 'whale-thesis-ledger.csv'; a.click();
+    URL.revokeObjectURL(a.href);
+  };
+}
+renderRecord();
+$('conf-run').onclick = () => runConfluence();
+</script>
+</body>
+</html>
