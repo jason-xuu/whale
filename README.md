@@ -8,7 +8,7 @@ Free, self-hosted whale-tracking dashboard: options flow (CBOE), 13F institution
 
 ### 1. GitHub Pages (zero install)
 
-Open the live link above. A scheduled GitHub Actions workflow (`.github/workflows/pages.yml`) snapshots CBOE option chains, SEC 13F filings, and Form 4 data into `data/` and redeploys the site every 15 minutes during US market hours — so the dashboard reads everything same-origin with no CORS proxies at all. CBOE data is 15-minute delayed at the source, so the snapshot cadence matches the data's own resolution.
+Open the live link above. A scheduled GitHub Actions workflow (`.github/workflows/pages.yml`) snapshots CBOE option chains, SEC 13F filings, and Form 4 data into `data/` and redeploys the site every 5 minutes during US market hours — so the dashboard reads everything same-origin with no CORS proxies at all. CBOE data is 15-minute delayed at the source, so the snapshot cadence matches the data's own resolution.
 
 Covered by snapshots: the default watchlist (`scripts/watchlist.json`), the 12 tracked funds' 13Fs, recent Form 4 filings, and per-ticker insider scans. Tickers or CIKs outside the snapshot fall back to direct fetch + public CORS relays, which usually fail for large payloads — use the local launcher for arbitrary symbols.
 

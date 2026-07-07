@@ -90,15 +90,15 @@
 </header>
 
 <div class="tabs">
-  <div class="tab active" data-panel="flow">📊 Options Flow</div>
-  <div class="tab" data-panel="conf">⚡ Confluence</div>
+  <div class="tab active" data-panel="conf">⚡ Confluence</div>
+  <div class="tab" data-panel="flow">📊 Options Flow</div>
   <div class="tab" data-panel="inst">🏦 Institutions (13F)</div>
   <div class="tab" data-panel="insider">👤 Insiders (Form 4)</div>
   <div class="tab" data-panel="congress">🏛️ Congress</div>
 </div>
 
 <!-- ============ OPTIONS FLOW ============ -->
-<section class="panel active" id="panel-flow">
+<section class="panel" id="panel-flow">
   <div class="controls card">
     <label>Watchlist (comma-separated)
       <input id="flow-watchlist" style="width:340px" spellcheck="false">
@@ -141,7 +141,7 @@
 </section>
 
 <!-- ============ CONFLUENCE ============ -->
-<section class="panel" id="panel-conf">
+<section class="panel active" id="panel-conf">
   <div class="controls card">
     <label>Tickers
       <input id="conf-watchlist" style="width:320px" spellcheck="false">
@@ -278,7 +278,8 @@ function updateBaselines(chain) {
   const today = new Date().toISOString().slice(0, 10);
   for (const [t, cs] of Object.entries(chain || {})) {
     const arr = hist[t] = hist[t] || [];
-    const rec = {d: today, nd: cs.netDelta, pc: cs.callPrem > 0 ? cs.putPrem / cs.callPrem : null,
+    const rec = {d: today, nd: cs.netDelta, nds: cs.classDelta > 0 ? cs.netDeltaSided : null,
+                 pc: cs.callPrem > 0 ? cs.putPrem / cs.callPrem : null,
                  sk: cs.skew25, gx: cs.gex, iv: cs.frontATM};
     const i = arr.findIndex(x => x.d === today);
     if (i >= 0) arr[i] = rec; else arr.push(rec);
@@ -409,7 +410,7 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   store.set('tab', t.dataset.panel);
 });
 {
-  const saved = store.get('tab', 'flow');
+  const saved = store.get('tab', 'conf'); /* confluence is the primary view */
   const t = document.querySelector(`.tab[data-panel="${saved}"]`);
   if (t && !t.classList.contains('active')) {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
@@ -475,7 +476,7 @@ async function scanFlow(silent) {
       const spot = j.data.current_price ?? j.data.close ?? j.data.prev_day_close ?? null;
       /* whole-tape microstructure for this ticker, accumulated in the same pass
          that extracts whale prints. All of it derives from the chain itself. */
-      const cs = {spot, netDelta: 0, absDelta: 0, callPrem: 0, putPrem: 0,
+      const cs = {spot, netDelta: 0, absDelta: 0, netDeltaSided: 0, classDelta: 0, callPrem: 0, putPrem: 0,
                   signedPrem: 0, classPrem: 0, gex: 0, expIV: {}, legs: []};
       const out = [];
       for (const o of (j.data.options || [])) {
@@ -499,10 +500,18 @@ async function scanFlow(silent) {
           else if (o.last_trade_price <= bid + w) sideSign = -1;
         }
         if (spot != null && vol > 0) {
+          /* buyer-assumed delta tape (fallback) and the sided tape over volume
+             whose aggressor we could classify — a sold call is NOT bullish
+             delta, so the sided read is the one that matters */
           cs.netDelta += vol * delta * 100 * spot;
           cs.absDelta += vol * Math.abs(delta) * 100 * spot;
           cs[p.type === 'C' ? 'callPrem' : 'putPrem'] += notional;
-          if (sideSign) { cs.signedPrem += sideSign * notional * (p.type === 'C' ? 1 : -1); cs.classPrem += notional; }
+          if (sideSign) {
+            cs.signedPrem += sideSign * notional * (p.type === 'C' ? 1 : -1);
+            cs.classPrem += notional;
+            cs.netDeltaSided += sideSign * vol * delta * 100 * spot;
+            cs.classDelta += vol * Math.abs(delta) * 100 * spot;
+          }
         }
         /* dealer gamma exposure per 1% move — gamma from Black-Scholes using the
            contract's own IV (the feed doesn't carry gamma). Convention: dealers
@@ -547,6 +556,31 @@ async function scanFlow(silent) {
   let rows = results.flat().filter(r =>
     r.vol >= minVol && r.notional >= minNotional && r.volOI >= minVolOI &&
     (side === 'all' || r.type === side));
+  /* live spot upgrade: CBOE chain spots are 15-min delayed; with a Finnhub key
+     (free, real-time for US stocks, CORS-enabled) refresh each ticker's spot
+     and re-derive moneyness. Chain analytics keep the snapshot spot — greeks
+     and IV in the chain correspond to it — but decisions (OTM/ITM, breakeven
+     distance, ledger pricing) use the freshest price available. */
+  flowState.spotsLive = 0;
+  {
+    const fhKey = store.get('finnhub', '');
+    if (fhKey && rows.length) {
+      const uniq = [...new Set(rows.map(r => r.ticker))].filter(t => !INDEX_MAP[t]);
+      const live = {};
+      await pool(uniq, async t => {
+        try {
+          const q = await fetchJSON(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(t)}&token=${encodeURIComponent(fhKey)}`, {relay: false, timeout: 8000});
+          if (q && q.c > 0) live[t] = q.c;
+        } catch (e) {}
+      }, 4);
+      rows.forEach(r => {
+        const s = live[r.ticker];
+        if (s) { r.spot = s; r.spotLive = true; r.otm = r.type === 'C' ? r.strike > s : r.strike < s; }
+      });
+      flowState.spotsLive = Object.keys(live).length;
+    }
+  }
+  flowState.feedTime = feedTime;
   /* hedge screening: index puts, overwrites, and disaster-insurance profiles
      are flows, not bets. Excluded by default; the checkbox lets them back in
      (tagged), and the stats always disclose what was screened out. */
@@ -571,7 +605,7 @@ async function scanFlow(silent) {
     r.tier = (r.otm && r.recent && !r.hedge) ? (r.type === 'C' ? 0 : 1) : 2; /* hedges never rank as top bets */
     r.smart = r.tier * 1e13 - r.notional;
   });
-  flowState.sort = {key: 'smart', dir: 1};
+  if (!silent) flowState.sort = {key: 'smart', dir: 1}; /* don't yank the user's column sort on auto-refresh */
   flowState.rows = rows;
   const callPrem = rows.filter(r => r.type === 'C').reduce((s, r) => s + r.notional, 0);
   const putPrem = rows.filter(r => r.type === 'P').reduce((s, r) => s + r.notional, 0);
@@ -1091,13 +1125,16 @@ function scoreComponents(c) {
     if (cs) {
       const dirs = [], wts = [];
       const chainTotal = cs.callPrem + cs.putPrem;
-      if (cs.classPrem > 0 && chainTotal > 0 && cs.classPrem >= 0.3 * chainTotal) { dirs.push(cs.signedPrem / cs.classPrem); wts.push(2); }
-      if (cs.absDelta > 0) { dirs.push(cs.netDelta / cs.absDelta); wts.push(2); }
-      if (total > 0) { dirs.push((c.flow.call - c.flow.put) / total); wts.push(1); }
+      const covered = cs.classPrem > 0 && chainTotal > 0 && cs.classPrem >= 0.3 * chainTotal;
+      if (covered) { dirs.push(cs.signedPrem / cs.classPrem); wts.push(2); }             /* aggressor-signed premium */
+      if (covered && cs.classDelta > 0) { dirs.push(cs.netDeltaSided / cs.classDelta); wts.push(2); } /* sided delta tape */
+      if (cs.absDelta > 0) { dirs.push(cs.netDelta / cs.absDelta); wts.push(1); }        /* buyer-assumed fallback */
+      if (total > 0) { dirs.push((c.flow.call - c.flow.put) / total); wts.push(1); }     /* naive premium split */
       if (dirs.length) dir = dirs.reduce((a, d, i) => a + d * wts[i], 0) / wts.reduce((a, b) => a + b, 0);
       /* net delta flow ≥2σ beyond this ticker's own baseline, in the same
          direction the flow is pointing, earns an unusualness bonus */
-      if (c.z && c.z.nd != null && Math.abs(c.z.nd) >= 2 && Math.sign(c.z.nd) === Math.sign(dir || c.z.nd))
+      const zEff = c.z && (c.z.nds != null ? c.z.nds : c.z.nd);
+      if (zEff != null && dir !== 0 && Math.abs(zEff) >= 2 && Math.sign(zEff) === Math.sign(dir))
         s = Math.min(35, s + 3);
     }
     comps.flow = {s, dir, max: 35}; }
@@ -1167,19 +1204,24 @@ function scoreComponents(c) {
      against this verdict? Skew, term structure, and the delta tape. */
   const cs = c.chain, z = c.z || {};
   if (cs && wDir !== 0) {
-    const ndr = cs.absDelta > 0 ? cs.netDelta / cs.absDelta : null;
+    /* prefer the sided tape (aggressor-classified volume) — the buyer-assumed
+       read is only a fallback when classification coverage is too thin */
+    const sided = cs.classDelta > 0;
+    const ndr = sided ? cs.netDeltaSided / cs.classDelta : (cs.absDelta > 0 ? cs.netDelta / cs.absDelta : null);
+    const ndVal = sided ? cs.netDeltaSided : cs.netDelta;
+    const tapeLabel = sided ? 'sided tape' : 'tape (buyer-assumed)';
     if (wDir > 0) {
       if (cs.skew25 != null && (cs.skew25 >= 8 || (z.sk != null && z.sk >= 1.5)))
         add(Math.min(5, cs.skew25 / 4), `25Δ put skew at ${cs.skew25.toFixed(1)} vol pts${z.sk != null ? ` (${z.sk > 0 ? '+' : ''}${z.sk.toFixed(1)}σ vs baseline)` : ''} — downside protection heavily bid`);
       if (cs.term != null && cs.term >= 3)
         add(Math.min(4, cs.term / 2), `inverted IV term structure (front +${cs.term.toFixed(1)} pts over next expiry) — near-term event risk priced in`);
       if (ndr != null && ndr <= -0.15)
-        add(Math.min(6, Math.abs(ndr) * 12), `tape is net SHORT delta (${fmt$(cs.netDelta)}) despite the bullish premium mix`);
+        add(Math.min(6, Math.abs(ndr) * 12), `${tapeLabel} is net SHORT delta (${fmt$(ndVal)}) despite the bullish premium mix`);
     } else {
       if (cs.skew25 != null && (cs.skew25 <= -4 || (z.sk != null && z.sk <= -1.5)))
         add(Math.min(5, Math.abs(cs.skew25) / 3), `call skew at ${cs.skew25.toFixed(1)} vol pts — upside being chased against the bear case`);
       if (ndr != null && ndr >= 0.15)
-        add(Math.min(6, ndr * 12), `tape is net LONG delta (+${fmt$(cs.netDelta)}) despite the bearish premium mix`);
+        add(Math.min(6, ndr * 12), `${tapeLabel} is net LONG delta (+${fmt$(ndVal)}) despite the bearish premium mix`);
     }
   }
   counter.pts = Math.min(20, counter.pts);
@@ -1188,7 +1230,11 @@ function scoreComponents(c) {
   /* confidence tier: how much should you trust this verdict? Driven by source
      count, score-weighted directional agreement, evidence level, and how much
      the cross-exam took back. Rendered next to the verdict and gates sizing. */
-  const agreeW = raw > 0 ? list.reduce((a, x) => a + (x.s > 0 && Math.sign(x.dir) === Math.sign(wDir || 1) ? x.s : 0), 0) / raw : 0;
+  /* agreement counts only sources that actually express a direction —
+     a neutral source (|dir| < 0.1) is abstaining, not dissenting */
+  const dirComps = list.filter(x => x.s > 0 && Math.abs(x.dir) >= 0.1);
+  const dirW = dirComps.reduce((a, x) => a + x.s, 0);
+  const agreeW = dirW > 0 ? dirComps.reduce((a, x) => a + (Math.sign(x.dir) === Math.sign(wDir || 1) ? x.s : 0), 0) / dirW : 0;
   const confidence = (active >= 3 && agreeW >= 0.7 && adjScore >= 40 && counter.pts <= 8) ? 'HIGH'
                    : (active >= 2 && agreeW >= 0.55 && adjScore >= 22) ? 'MEDIUM' : 'LOW';
   return {comps, score, adjScore, dir: wDir, active, counter, confidence, agreeW};
@@ -1263,6 +1309,7 @@ async function runConfluence(silent) {
       const inst = f13 && names && names[t] ? (f13.get(names[t]) || []) : (f13 ? [] : null);
       const chain = (flowState.chain || {})[t] || null;
       const z = chain ? {nd: zScore(flowState.baseline, t, 'nd', chain.netDelta),
+                         nds: chain.classDelta > 0 ? zScore(flowState.baseline, t, 'nds', chain.netDeltaSided) : null,
                          sk: zScore(flowState.baseline, t, 'sk', chain.skew25),
                          gx: zScore(flowState.baseline, t, 'gx', chain.gex),
                          iv: zScore(flowState.baseline, t, 'iv', chain.frontATM)} : {};
@@ -1338,7 +1385,8 @@ async function runConfluence(silent) {
       <div class="stat"><div class="k">Tickers scanned</div><div class="v accent">${tickers.length}</div></div>
       <div class="stat"><div class="k">With confluence (2+ sources)</div><div class="v ${strong ? 'green' : ''}">${strong}</div></div>
       <div class="stat"><div class="k">Top score</div><div class="v">${top ? esc(top.ticker) + ' <span class="dim" style="font-size:13px">' + top.adjScore + '/100</span>' : '—'}</div></div>
-      <div class="stat"><div class="k">Coverage</div><div class="v" style="font-size:13px">Options + Insiders${f13 ? ' + 13F' : ''}${cgKey ? ' + Congress' : ''}</div></div>`;
+      <div class="stat"><div class="k">Coverage</div><div class="v" style="font-size:13px">Options + Insiders${f13 ? ' + 13F' : ''}${cgKey ? ' + Congress' : ''}</div></div>
+      <div class="stat"><div class="k">Data freshness</div><div class="v" style="font-size:12px">${flowState.feedTime ? 'chains ' + esc(flowState.feedTime.slice(11, 16)) + ' UTC (CBOE 15-min delayed)' : 'chains —'}<br>${flowState.spotsLive ? `<span class="green">${flowState.spotsLive} live spots</span> (Finnhub real-time)` : '<span class="dim">spots delayed — add a Finnhub key (Congress tab) for real-time</span>'}</div></div>`;
     if (silent) setMsg('conf-msg', ''); /* clear the progress strip */
     if (!f13 || !cgKey) setMsg('conf-msg',
       (!f13 ? '13F scan disabled — institutions excluded from scores. ' : '') +
@@ -1393,8 +1441,10 @@ function recMove(r) {
       const pEmp = (wins + 1) / (graded.length + 2); /* Laplace-smoothed hit rate */
       const edge = pEmp - o.beProb;
       if (edge > 0) {
-        const kelly = Math.min(0.05, edge / ((1 - o.beProb) / o.beProb) / 2); /* half-Kelly, 5% cap */
-        out += ` <b>EDGE</b> market charges ${mkt}% past-breakeven; this ledger's graded hit rate is ${Math.round(pEmp * 100)}% (${wins}/${graded.length}) → suggested risk ≤${(kelly * 100).toFixed(1)}% of book (half-Kelly).`;
+        /* binary-approximation Kelly at the market's own odds: full Kelly
+           f* = edge / (1 − p_mkt); half of that, capped at 5% of book */
+        const kelly = Math.min(0.05, edge / (1 - o.beProb) / 2);
+        out += ` <b>EDGE</b> market charges ${mkt}% past-breakeven; this ledger's graded hit rate is ${Math.round(pEmp * 100)}% (${wins}/${graded.length}, used as a proxy win rate) → suggested risk ≤${(kelly * 100).toFixed(1)}% of book (half-Kelly, binary approximation).`;
       } else {
         out += ` <b class="amber">EDGE</b> market charges ${mkt}% past-breakeven but this ledger's graded hit rate is only ${Math.round(pEmp * 100)}% (${wins}/${graded.length}) — no statistical edge at this price; paper-trade it.`;
       }
@@ -1460,12 +1510,13 @@ function renderConfluence() {
       const cs = r.chain, z = r.z || {};
       const zTag = v => v == null ? '' : ` <span class="${Math.abs(v) >= 2 ? 'amber' : 'dim'}">(${v > 0 ? '+' : ''}${v.toFixed(1)}σ)</span>`;
       const parts = [];
-      if (cs.absDelta > 0) parts.push(`net Δ-adjusted flow <b class="${cs.netDelta >= 0 ? 'green' : 'red'}">${cs.netDelta >= 0 ? '+' : '−'}${fmt$(Math.abs(cs.netDelta))}</b>${zTag(z.nd)}`);
+      if (cs.classDelta > 0) parts.push(`net Δ flow (sided) <b class="${cs.netDeltaSided >= 0 ? 'green' : 'red'}">${cs.netDeltaSided >= 0 ? '+' : '−'}${fmt$(Math.abs(cs.netDeltaSided))}</b>${zTag(z.nds)}`);
+      else if (cs.absDelta > 0) parts.push(`net Δ flow (buyer-assumed) <b class="${cs.netDelta >= 0 ? 'green' : 'red'}">${cs.netDelta >= 0 ? '+' : '−'}${fmt$(Math.abs(cs.netDelta))}</b>${zTag(z.nd)}`);
       if (cs.gex) parts.push(`dealer gamma <b>${cs.gex >= 0 ? '+' : '−'}${fmt$(Math.abs(cs.gex))}</b>/1%${zTag(z.gx)} <span class="dim">${cs.gex >= 0 ? 'pinning regime — moves dampened' : 'negative gamma — moves amplified'}</span>`);
       if (cs.skew25 != null) parts.push(`25Δ skew ${cs.skew25 >= 0 ? '+' : ''}${cs.skew25.toFixed(1)} pts${zTag(z.sk)}`);
       if (cs.term != null) parts.push(`term ${cs.term >= 0 ? 'front +' + cs.term.toFixed(1) + ' pts (inverted)' : 'upward (calm)'}`);
       if (parts.length) detail += `<br><b class="accent">MARKET STRUCTURE</b> ${parts.join(' · ')}` +
-        (z.nd == null ? ' <span class="dim">— z-scores appear after 5 scan-days of baseline</span>' : '');
+        (z.nd == null && z.nds == null ? ' <span class="dim">— z-scores appear after 5 scan-days of baseline</span>' : '');
     }
     if (r.counter.notes.length) {
       detail += `<br><b class="amber">CROSS-EXAM</b> ${r.counter.notes.map(esc).join(' · ')}`;
@@ -1499,6 +1550,15 @@ function renderConfluence() {
 function getLedger() { try { return JSON.parse(store.get('ledger', '[]')); } catch (e) { return []; } }
 function saveLedger(l) { store.set('ledger', JSON.stringify(l)); }
 async function spotOf(t) {
+  /* real-time via Finnhub when a key exists (ledger entries/exits deserve the
+     freshest price); CBOE 15-min delayed quote as the fallback */
+  const fhKey = store.get('finnhub', '');
+  if (fhKey && !INDEX_MAP[t]) {
+    try {
+      const q = await fetchJSON(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(t)}&token=${encodeURIComponent(fhKey)}`, {relay: false, timeout: 8000});
+      if (q && q.c > 0) return q.c;
+    } catch (e) {}
+  }
   const j = await fetchJSON(`https://cdn.cboe.com/api/global/delayed_quotes/quotes/${INDEX_MAP[t] || t}.json`);
   return j.data.current_price ?? j.data.close;
 }

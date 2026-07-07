@@ -5,8 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    # every 15 min through US market hours (13:30-20:00 UTC covers ET in both DST states)
-    - cron: '3/15 13-21 * * 1-5'
+    # every 5 min through US market hours (13:30-20:00 UTC covers ET in both DST
+    # states) — CBOE data is 15-min delayed at the source, so this cadence keeps
+    # snapshot staleness small relative to the feed's own delay
+    - cron: '*/5 13-21 * * 1-5'
     # after-close final snapshot
     - cron: '23 22 * * 1-5'
     # pre-market full SEC refresh (13F mirrors, per-ticker insider scans)

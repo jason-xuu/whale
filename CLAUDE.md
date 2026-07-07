@@ -92,3 +92,18 @@ not timing). Congress disclosures lag ≤45d. localStorage ledger is per-origin 
   disclose count+premium. 13F puts with same-fund long stock get `married=true` (excluded from inst
   dir + cross-exam unless toggle). Form 4 `aff10b5One` → `planned` (excluded from buy/sell tallies,
   tracked in plannedBuyVal/SellVal, badged in insiders tab). Toggle ON = count everything, tagged.
+- **Accuracy audit (2026-07)**: sided netDelta added (`netDeltaSided`/`classDelta` over aggressor-
+  classified volume) — buyer-assumed netDelta stays as downweighted fallback; the two can DISAGREE
+  in sign (NVDA 07-08: +1.34B unsided vs −1.51B sided — sided wins). Kelly fixed to
+  f* = edge/(1−p_mkt), half applied, 5% cap. agreeW counts only |dir|≥0.1 sources (neutral =
+  abstain). z-bonus requires dir≠0 and sign match; sided z stored as `nds` in baselines.
+- **Freshness**: Pages snapshots every 5 min market hours (CBOE itself 15-min delayed). With a
+  Finnhub key, spots (rows.spot/otm, spotOf, ledger pricing) upgrade to real-time REST quotes
+  (relay:false, never proxied); chain analytics keep the snapshot spot for greek consistency.
+  Conf tab is the primary (leftmost, default) view; "Data freshness" stat disclosès feed time +
+  spot source.
+- **Tests**: `tests/test-static.js` (78 assertions, integration) and `tests/test-verify-math.js`
+  (32 assertions — independent erf-based BS recompute, raw-JSON chain-analytics re-accumulation,
+  thesis consistency invariants, Kelly formula fixtures). Run:
+  `npm i jsdom && node tests/test-static.js whale-dashboard.html <site-dir>` where site-dir holds
+  a data/ snapshot built by scripts/build-data.mjs.
