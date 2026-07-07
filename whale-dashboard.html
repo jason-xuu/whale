@@ -129,6 +129,9 @@
         <option value="P">Puts</option>
       </select>
     </label>
+    <label style="flex-direction:row;align-items:center;gap:6px">
+      <input type="checkbox" id="flow-hedges" style="width:auto"> Include hedge flow <span class="dim">(index puts / insurance — excluded by default so hedges don't read as bets)</span>
+    </label>
     <label>&nbsp;<button class="primary" id="flow-refresh">Scan flow</button></label>
   </div>
   <div id="flow-stats" class="stats"></div>
@@ -153,6 +156,9 @@
     <label style="flex-direction:row;align-items:center;gap:7px;padding-top:16px">
       <input type="checkbox" id="conf-13f" checked style="width:auto"> Include 13F scan of 12 whale funds <span class="dim">(heavy — first run can take a minute, then cached)</span>
     </label>
+    <label style="flex-direction:row;align-items:center;gap:6px">
+      <input type="checkbox" id="conf-hedges" style="width:auto"> Count hedge-type positions as bets <span class="dim">(index/insurance puts, married puts, 10b5-1 planned sales — off by default: hedges aren't conviction)</span>
+    </label>
     <label>&nbsp;<button class="primary" id="conf-run">Run confluence scan</button></label>
   </div>
   <div id="conf-stats" class="stats"></div>
@@ -170,6 +176,7 @@
     <b>Theses &amp; ledger</b>: each directional row becomes a falsifiable claim — outperform/underperform SPY over a fixed horizon (14d default, 21d for strong confluence, 30d when insiders dominate, since insider alpha is slower), with an objective invalidation level taken from the whale's own strike when available. "Log theses" snapshots entry prices; after each deadline the dashboard grades itself against real prices and shows its cumulative hit rate and average excess return — including losses. <b>Market odds</b> lines are risk-neutral probabilities implied by the whale contract's own IV (Black-Scholes N(d₂)) — what the options market itself believes, as a reality check on the signal.
     <b>Microstructure.</b> Flow direction is read the way a desk reads it, not by assuming every call is bullish: trades at the ask are classified buyer-initiated and at the bid seller-initiated; the tape's net delta-adjusted dollar flow is computed across the whole chain; dealer gamma exposure (Black-Scholes gamma from each contract's own IV × open interest) flags pinning vs amplification regimes; 25Δ skew and IV term structure enter the cross-exam. Each ticker also builds a private baseline of these metrics from your own scans (stored locally, one point per day) — after 5 scan-days, today's readings get z-scores against that history, because "unusual" only means something relative to a name's own normal.
     <b>Confidence.</b> Every verdict carries a HIGH/MEDIUM/LOW confidence tier from source count, score-weighted directional agreement, evidence level, and how much the cross-exam took back. Insider buys are conviction-weighted (C-suite buys and ≥3-buyer clusters count extra); 13F positions are weighted by their share of each fund's book, not just dollars.
+    <b>Hedges are not bets.</b> By default the engine screens out flow whose profile says insurance rather than conviction: put buying (and call overwriting) in broad index/ETF underlyings, deep-OTM disaster-insurance puts (≤0.10Δ), 13F puts married to the same fund's long stock in the same name, and insider trades executed under pre-arranged Rule 10b5-1 plans. Screened items are always disclosed (flow stats, HEDGE tags, "married/planned" notes) — the "count hedge-type positions" checkbox puts them back into the arithmetic if you want the raw read.
     <b>Recommended move</b> lines are derived entirely from the scan: direction from the verdict; the contract by execution-quality scoring of aligned whale prints (horizon coverage, delta band, bid/ask spread, open interest, aggressor side — a print the whale <i>sold</i> is never mirrored, and if every aligned print traded at the bid the engine says so and routes to shares); cost/breakeven from the contract itself; the <b>edge test</b> compares the market's implied past-breakeven odds against this ledger's own graded hit rate — once ≥10 theses are graded, positive edge produces a half-Kelly risk budget (capped 5%), and no edge says so plainly. Rich front IV triggers a debit-spread alternative priced from real legs in the same chain. When signals are mixed or weak, the recommendation is to stand aside.
     The scan runs automatically when this tab opens and re-runs on the auto-refresh interval while it stays open.
     Data lags still apply (13F quarterly, congress up to 45d). This is a research instrument, not trade advice — judge it by its ledger, and verify filings via the links in each tab.
@@ -415,6 +422,25 @@ $('clock').textContent = new Date().toLocaleString();
 <script>
 /* ================= OPTIONS FLOW (CBOE delayed) ================= */
 const INDEX_MAP = {SPX:'_SPX', VIX:'_VIX', RUT:'_RUT', DJX:'_DJX', XSP:'_XSP', NDX:'_NDX'};
+
+/* Reference data (like the FUNDS list): broad-market index/ETF underlyings
+   where put buying is overwhelmingly portfolio insurance and call selling is
+   overwrite income — not single-name conviction. */
+const BROAD_HEDGE_TICKERS = new Set([...Object.keys(INDEX_MAP),
+  'SPY','QQQ','IWM','DIA','VOO','IVV','VTI','EEM','EFA','EWZ','FXI',
+  'HYG','LQD','TLT','IEF','GLD','SLV','XLF','XLK','XLE','XLV','XLI','XLP','XLU','XLY','XLB','XLRE',
+  'SMH','SOXX','KRE','XBI','ARKK','VXX','UVXY','SVXY','UVIX','SQQQ','TQQQ','SPXU','SDS']);
+/* Classify a whale print as likely hedge/insurance rather than a directional
+   bet. Every input is from the print itself; returns the reason or null. */
+function classifyHedge(r) {
+  if (BROAD_HEDGE_TICKERS.has(r.ticker)) {
+    if (r.type === 'P' && r.sideSign >= 0) return 'index put — portfolio insurance, not a bet';
+    if (r.type === 'C' && r.sideSign === -1) return 'index call sold — overwrite income, not direction';
+  }
+  if (r.type === 'P' && r.sideSign >= 0 && r.otm && Math.abs(r.delta) > 0 && Math.abs(r.delta) <= 0.10)
+    return `deep-OTM put (${Math.abs(r.delta).toFixed(2)}Δ) — disaster-insurance profile`;
+  return null;
+}
 /* default sort 'smart': fresh out-of-the-money bets first (calls, then puts),
    ITM and stale prints below — still shown, just lower. Click any column
    header to re-sort; hit Scan to come back to smart order. */
@@ -521,6 +547,14 @@ async function scanFlow(silent) {
   let rows = results.flat().filter(r =>
     r.vol >= minVol && r.notional >= minNotional && r.volOI >= minVolOI &&
     (side === 'all' || r.type === side));
+  /* hedge screening: index puts, overwrites, and disaster-insurance profiles
+     are flows, not bets. Excluded by default; the checkbox lets them back in
+     (tagged), and the stats always disclose what was screened out. */
+  rows.forEach(r => r.hedge = classifyHedge(r));
+  const includeHedges = $('flow-hedges').checked;
+  const hedgePrem = rows.filter(r => r.hedge).reduce((s, r) => s + r.notional, 0);
+  const hedgeCount = rows.filter(r => r.hedge).length;
+  if (!includeHedges) rows = rows.filter(r => !r.hedge);
   /* tier for the smart sort: 0 = recent OTM call, 1 = recent OTM put,
      2 = everything else (ITM or stale). Encoded so one ascending numeric
      sort yields tier order with notional descending inside each tier.
@@ -534,7 +568,7 @@ async function scanFlow(silent) {
   });
   rows.forEach(r => {
     r.recent = r._ltt > 0 && maxLtt - r._ltt <= RECENT_MS;
-    r.tier = (r.otm && r.recent) ? (r.type === 'C' ? 0 : 1) : 2;
+    r.tier = (r.otm && r.recent && !r.hedge) ? (r.type === 'C' ? 0 : 1) : 2; /* hedges never rank as top bets */
     r.smart = r.tier * 1e13 - r.notional;
   });
   flowState.sort = {key: 'smart', dir: 1};
@@ -551,7 +585,8 @@ async function scanFlow(silent) {
     <div class="stat"><div class="k">Put premium</div><div class="v red">${fmt$(putPrem)}</div></div>
     <div class="stat"><div class="k">Call share ${pct}%</div>
       <div class="ratiobar"><div class="c" style="width:${pct}%"></div><div class="p" style="width:${100-pct}%"></div></div></div>
-    <div class="stat"><div class="k">Top ticker</div><div class="v">${topTicker ? esc(topTicker[0]) + ' <span class="dim" style="font-size:13px">' + fmt$(topTicker[1]) + '</span>' : '—'}</div></div>`;
+    <div class="stat"><div class="k">Top ticker</div><div class="v">${topTicker ? esc(topTicker[0]) + ' <span class="dim" style="font-size:13px">' + fmt$(topTicker[1]) + '</span>' : '—'}</div></div>
+    <div class="stat"><div class="k">Hedge flow ${includeHedges ? 'shown (tagged)' : 'screened out'}</div><div class="v" style="font-size:14px">${hedgeCount ? fmtN(hedgeCount) + ' prints · ' + fmt$(hedgePrem) : 'none'}</div></div>`;
   if (fails.length && !silent) {
     setMsg('flow-msg', fails.length === tickers.length
       ? 'CBOE blocks direct browser requests, and the relay fallback also failed. Close this tab and double-click <b>Start Whale Tracker.command</b> (in the same folder) — it opens this dashboard through a local server that fetches CBOE data reliably.'
@@ -584,7 +619,7 @@ function renderFlow() {
       <td>${(r.iv * 100).toFixed(0)}%</td>
       <td>${r.delta.toFixed(2)}</td>
       <td class="l">${r.recent ? '<span class="green">●</span> ' : ''}<span class="dim">${r.lastTrade ? esc(r.lastTrade.replace('T', ' ').slice(11, 16)) : '—'}</span></td>
-      <td class="l dim">${r.otm == null ? '—' : r.otm ? 'OTM' : 'ITM'}</td>
+      <td class="l dim">${r.otm == null ? '—' : r.otm ? 'OTM' : 'ITM'}${r.hedge ? ` <span class="tag other" title="${esc(r.hedge)}">HEDGE</span>` : ''}</td>
     </tr>`,
     [{key:'ticker',label:'Ticker',left:1},{key:'type',label:'Side',left:1},{key:'strike',label:'Strike'},
      {key:'exp',label:'Expiry',left:1},{key:'price',label:'Price'},{key:'vol',label:'Volume'},
@@ -599,6 +634,13 @@ function renderFlow() {
 }
 $('flow-refresh').onclick = () => scanFlow();
 ['flow-minvol','flow-minnotional','flow-minvoloi','flow-side'].forEach(id => $(id).onchange = () => { if (flowState.rows.length) scanFlow(); });
+/* one shared hedge toggle, mirrored on the flow and confluence tabs */
+$('flow-hedges').checked = store.get('hedges', '0') === '1';
+$('flow-hedges').onchange = () => {
+  store.set('hedges', $('flow-hedges').checked ? '1' : '0');
+  const c = document.getElementById('conf-hedges'); if (c) c.checked = $('flow-hedges').checked;
+  if (flowState.rows.length) scanFlow();
+};
 </script>
 <script>
 /* ================= INSTITUTIONS — SEC EDGAR 13F ================= */
@@ -708,6 +750,9 @@ async function parseForm4(f) {
   const xml = new DOMParser().parseFromString(await fetchJSON(`${dir}/${docName}`, {text: true}), 'text/xml');
   const ticker = xmlVal(xml, 'issuerTradingSymbol'), company = xmlVal(xml, 'issuerName');
   const owner = xmlVal(xml, 'rptOwnerName');
+  /* Rule 10b5-1 checkbox (post-2023 forms): trades executed under a
+     pre-arranged plan — scheduled, not informative */
+  const planned = /^(1|true)$/i.test(xmlVal(xml, 'aff10b5One'));
   const title = xmlVal(xml, 'officerTitle') ||
     (xmlVal(xml, 'isDirector') === '1' || /true/i.test(xmlVal(xml, 'isDirector')) ? 'Director' : '') ||
     (xmlVal(xml, 'isTenPercentOwner') === '1' || /true/i.test(xmlVal(xml, 'isTenPercentOwner')) ? '10% owner' : '');
@@ -721,7 +766,7 @@ async function parseForm4(f) {
     b.shares += shares; b.value += shares * price;
   });
   return Object.entries(byCode).map(([code, b]) => ({
-    ticker, company, owner, title, code, label: CODE_LABEL[code] || code,
+    ticker, company, owner, title, planned, code, label: CODE_LABEL[code] || code,
     shares: b.shares, value: b.value, avg: b.shares ? b.value / b.shares : 0,
     date: b.date, fileDate: f.fileDate,
     url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=${f.cik}&type=4`,
@@ -766,7 +811,7 @@ function renderInsiders() {
       <td class="l"><b>${esc(r.ticker)}</b></td>
       <td class="l">${esc(r.company)}</td>
       <td class="l">${esc(r.owner)}<div class="dim" style="font-size:11px">${esc(r.title)}</div></td>
-      <td class="l"><span class="tag ${r.code === 'P' ? 'buy' : r.code === 'S' ? 'sell' : 'other'}">${r.label}</span></td>
+      <td class="l"><span class="tag ${r.code === 'P' ? 'buy' : r.code === 'S' ? 'sell' : 'other'}">${r.label}</span>${r.planned ? ' <span class="dim" style="font-size:10px" title="Executed under a pre-arranged Rule 10b5-1 trading plan — scheduled, not discretionary">10b5-1</span>' : ''}</td>
       <td>${fmtN(r.shares)}</td>
       <td>${r.avg ? r.avg.toFixed(2) : '—'}</td>
       <td><b class="${r.code === 'P' ? 'green' : r.code === 'S' ? 'red' : ''}">${fmt$(r.value)}</b></td>
@@ -991,15 +1036,24 @@ async function insiderScan(ticker, days) {
   }
   filings.sort((a, b) => b.fileDate.localeCompare(a.fileDate));
   const out = {buyVal: 0, sellVal: 0, buyers: new Set(), sellers: new Set(), filings: 0,
-               buyerTitles: {}, sellerTitles: {}};
+               buyerTitles: {}, sellerTitles: {}, plannedBuyVal: 0, plannedSellVal: 0};
+  /* 10b5-1 plan trades are scheduled months in advance — zero information
+     content. Screened from the tallies unless the hedge toggle is on. */
+  const countHedges = store.get('hedges', '0') === '1';
   const parsed = await pool(filings.slice(0, 8), f => parseForm4(f).catch(() => null), 4);
   for (const rows of parsed) {
     if (!rows) continue;
     const mine = rows.filter(r => (r.ticker || '').toUpperCase() === ticker);
     if (mine.length) out.filings++;
     for (const r of mine) {
-      if (r.code === 'P') { out.buyVal += r.value; out.buyers.add(r.owner); if (r.title) out.buyerTitles[r.owner] = r.title; }
-      if (r.code === 'S') { out.sellVal += r.value; out.sellers.add(r.owner); if (r.title) out.sellerTitles[r.owner] = r.title; }
+      if (r.code === 'P') {
+        if (r.planned) out.plannedBuyVal += r.value;
+        if (!r.planned || countHedges) { out.buyVal += r.value; out.buyers.add(r.owner); if (r.title) out.buyerTitles[r.owner] = r.title; }
+      }
+      if (r.code === 'S') {
+        if (r.planned) out.plannedSellVal += r.value;
+        if (!r.planned || countHedges) { out.sellVal += r.value; out.sellers.add(r.owner); if (r.title) out.sellerTitles[r.owner] = r.title; }
+      }
     }
   }
   return out;
@@ -1057,9 +1111,16 @@ function scoreComponents(c) {
     if (B + S > 0) dir = (B - S) / (B + S);
     comps.ins = {s: Math.min(30, s), dir, max: 30}; }
   const held = c.inst ? c.inst.filter(h => h.value > 0) : [];
+  /* married-put detection: a fund holding puts against its own long stock in
+     the same name is hedging that position, not betting against it */
+  held.forEach(h => {
+    h.married = h.putCall === 'put' &&
+      held.some(x => x.fund === h.fund && (!x.putCall || x.putCall === 'call') && x.value > 0);
+  });
+  const directionalPut = h => h.putCall === 'put' && (c.includeHedges || !h.married);
   if (c.inst) { let s = 0, dir = 0;
     const longV = held.filter(h => !h.putCall || h.putCall === 'call').reduce((a, h) => a + h.value, 0);
-    const putV = held.filter(h => h.putCall === 'put').reduce((a, h) => a + h.value, 0);
+    const putV = held.filter(directionalPut).reduce((a, h) => a + h.value, 0);
     /* conviction-weight each fund by the position's share of that fund's book:
        a 4% Burry position is a statement, a 0.05% Citadel line is inventory */
     const wByFund = {};
@@ -1085,9 +1146,9 @@ function scoreComponents(c) {
   if (wDir > 0) {
     if (c.ins.sellers.size) add(Math.min(8, 2 * c.ins.sellers.size + 2 * Math.log10(1 + c.ins.sellVal / 1e6)),
       `${c.ins.sellers.size} insider sale${c.ins.sellers.size === 1 ? '' : 's'} ${fmt$(c.ins.sellVal)}`);
-    const putV = held.filter(h => h.putCall === 'put').reduce((a, h) => a + h.value, 0);
+    const putV = held.filter(directionalPut).reduce((a, h) => a + h.value, 0);
     if (putV > 0) add(Math.min(8, 3 + 2 * Math.log10(1 + putV / 1e6)),
-      `fund put positions ${fmt$(putV)} [${[...new Set(held.filter(h => h.putCall === 'put').map(h => h.fund))].join(', ')}]`);
+      `fund put positions ${fmt$(putV)} [${[...new Set(held.filter(directionalPut).map(h => h.fund))].join(', ')}]`);
     const cuts = c.inst ? c.inst.filter(h => h.change === 'TRIMMED' || h.change === 'EXITED') : [];
     if (cuts.length) add(Math.min(6, 3 * cuts.length),
       cuts.map(h => `${h.fund} ${h.change.toLowerCase()}`).join(', '));
@@ -1205,7 +1266,8 @@ async function runConfluence(silent) {
                          sk: zScore(flowState.baseline, t, 'sk', chain.skew25),
                          gx: zScore(flowState.baseline, t, 'gx', chain.gex),
                          iv: zScore(flowState.baseline, t, 'iv', chain.frontATM)} : {};
-      const sc = scoreComponents({flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null, chain, z});
+      const sc = scoreComponents({flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null, chain, z,
+                                  includeHedges: $('conf-hedges').checked});
       const label = sc.dir > 0.2 ? 'BULLISH' : sc.dir < -0.2 ? 'BEARISH' : 'MIXED';
       /* the whale's own contract supplies objective thesis parameters */
       const prints = flowState.rows.filter(x => x.ticker === t).sort((a, b) => b.notional - a.notional);
@@ -1369,14 +1431,17 @@ function renderConfluence() {
     const f = r.flow, i = r.ins;
     const fDet = f.prints ? `${fmt$(f.call + f.put)} · ${Math.round(100 * f.call / (f.call + f.put || 1))}% calls · ${f.prints} prints` : 'no whale prints';
     const execBuyers = Object.values(i.buyerTitles || {}).filter(t => /chief|ceo|cfo|coo|president/i.test(t)).length;
-    const iDet = (i.buyers.size || i.sellers.size)
+    const planned = (i.plannedBuyVal || 0) + (i.plannedSellVal || 0);
+    const iDet = ((i.buyers.size || i.sellers.size)
       ? `${i.buyers.size} buyer${i.buyers.size === 1 ? '' : 's'}${execBuyers ? ` (${execBuyers} C-suite)` : ''} ${fmt$(i.buyVal)} / ${i.sellers.size} seller${i.sellers.size === 1 ? '' : 's'} ${fmt$(i.sellVal)}` +
-        (i.buyers.size >= 3 ? ' · <b class="green">CLUSTER BUY</b>' : '') : 'no P/S filings';
+        (i.buyers.size >= 3 ? ' · <b class="green">CLUSTER BUY</b>' : '') : 'no P/S filings') +
+      (planned > 0 ? ` · ${fmt$(planned)} 10b5-1 planned (${$('conf-hedges').checked ? 'counted' : 'screened'})` : '');
     const held = r.inst ? r.inst.filter(h => h.value > 0) : [];
     const changes = r.inst ? r.inst.filter(h => h.change && h.change !== 'HELD') : [];
     const nDet = r.inst == null ? '' : (held.length || changes.length
       ? `${new Set(held.map(h => h.fund)).size} funds ${fmt$(held.reduce((a, h) => a + h.value, 0))}` +
-        (changes.length ? ' · ' + changes.map(h => `${h.fund.split(' ')[0]} ${h.change}${h.pct != null ? ` (${(100 * h.pct).toFixed(1)}% of book)` : ''}`).join(', ') : '')
+        (changes.length ? ' · ' + changes.map(h => `${h.fund.split(' ')[0]} ${h.change}${h.pct != null ? ` (${(100 * h.pct).toFixed(1)}% of book)` : ''}`).join(', ') : '') +
+        (held.some(h => h.married) ? ` · ${fmt$(held.filter(h => h.married).reduce((a, h) => a + h.value, 0))} puts married to long stock (hedge)` : '')
       : 'not held');
     const cDet = r.cg == null ? '' : (r.cg.buys + r.cg.sells ? `${r.cg.buys} buys / ${r.cg.sells} sells` : 'no trades');
 
@@ -1525,6 +1590,13 @@ function renderRecord() {
 }
 renderRecord();
 $('conf-run').onclick = () => runConfluence();
+/* mirror of the flow tab's hedge toggle — same stored setting */
+$('conf-hedges').checked = store.get('hedges', '0') === '1';
+$('conf-hedges').onchange = () => {
+  store.set('hedges', $('conf-hedges').checked ? '1' : '0');
+  const f = document.getElementById('flow-hedges'); if (f) f.checked = $('conf-hedges').checked;
+  if (confState.rows.length) runConfluence();
+};
 /* auto list — first open of the tab, or page load landing on it, runs the scan */
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
   if (t.dataset.panel === 'conf' && !confState.rows.length) runConfluence();

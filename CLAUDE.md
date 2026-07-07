@@ -86,3 +86,9 @@ not timing). Congress disclosures lag ≤45d. localStorage ledger is per-origin 
 - Testing bar is now 59 jsdom assertions (scratchpad test-static.js pattern) — keep invariants:
   |signedPrem| ≤ classPrem ≤ callPrem+putPrem; sideSign ∈ {−1,0,1}; pct ∈ (0,1]; rec contract must
   exist in flowState.rows; Kelly text only with ≥10 graded.
+- **Hedge screening (default ON, `wt_hedges` toggle mirrored on flow+conf tabs)**: `classifyHedge()`
+  tags index/ETF puts bought (BROAD_HEDGE_TICKERS reference set), index calls sold, and ≤0.10Δ
+  bought puts as insurance — excluded from whale prints/flowByT and never tier 0/1; stats always
+  disclose count+premium. 13F puts with same-fund long stock get `married=true` (excluded from inst
+  dir + cross-exam unless toggle). Form 4 `aff10b5One` → `planned` (excluded from buy/sell tallies,
+  tracked in plannedBuyVal/SellVal, badged in insiders tab). Toggle ON = count everything, tagged.
