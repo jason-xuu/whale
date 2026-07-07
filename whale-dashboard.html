@@ -90,11 +90,11 @@
 </header>
 
 <div class="tabs">
-  <div class="tab active" data-panel="flow">Options Flow</div>
+  <div class="tab active" data-panel="flow">📊 Options Flow</div>
   <div class="tab" data-panel="conf">⚡ Confluence</div>
-  <div class="tab" data-panel="inst">Institutions (13F)</div>
-  <div class="tab" data-panel="insider">Insiders (Form 4)</div>
-  <div class="tab" data-panel="congress">Congress</div>
+  <div class="tab" data-panel="inst">🏦 Institutions (13F)</div>
+  <div class="tab" data-panel="insider">👤 Insiders (Form 4)</div>
+  <div class="tab" data-panel="congress">🏛️ Congress</div>
 </div>
 
 <!-- ============ OPTIONS FLOW ============ -->
@@ -129,7 +129,7 @@
         <option value="P">Puts</option>
       </select>
     </label>
-    <label>&nbsp;<button class="primary" id="flow-refresh">Scan</button></label>
+    <label>&nbsp;<button class="primary" id="flow-refresh">Scan flow</button></label>
   </div>
   <div id="flow-stats" class="stats"></div>
   <div id="flow-msg"></div>
@@ -158,7 +158,7 @@
   <div id="conf-stats" class="stats"></div>
   <div class="card" id="conf-record" style="margin-bottom:12px"></div>
   <div id="conf-msg"></div>
-  <div class="card tablewrap"><div id="conf-table" class="loading">Scans each ticker across all four whale sources and scores how strongly they align. Run the scan to begin.</div></div>
+  <div class="card tablewrap"><div id="conf-table" class="loading">Scans each ticker across all four whale sources and scores how strongly they align. Runs automatically when you open this tab, and re-runs on the auto-refresh interval.</div></div>
   <div class="foot">
     Methodology — weighted components: <b>Options flow 35</b> (today's whale prints; direction = call vs put premium tilt) ·
     <b>Insiders 30</b> (Form 4 filings over the lookback; open-market buys weighted heaviest — the best-documented signal; sales weighted low, they're usually noise) ·
@@ -168,6 +168,8 @@
     CONFLUENCE badge = 2+ sources active on a ticker, STRONG = 3+.
     <br><br>
     <b>Theses &amp; ledger</b>: each directional row becomes a falsifiable claim — outperform/underperform SPY over a fixed horizon (14d default, 21d for strong confluence, 30d when insiders dominate, since insider alpha is slower), with an objective invalidation level taken from the whale's own strike when available. "Log theses" snapshots entry prices; after each deadline the dashboard grades itself against real prices and shows its cumulative hit rate and average excess return — including losses. <b>Market odds</b> lines are risk-neutral probabilities implied by the whale contract's own IV (Black-Scholes N(d₂)) — what the options market itself believes, as a reality check on the signal.
+    <b>Recommended move</b> lines are derived entirely from the scan: direction from the confluence verdict, the specific contract from the largest whale print aligned with it (OTM with ≥1 week to expiry preferred), cost/breakeven/odds from that contract's own price and IV, and the exit from the thesis invalidation level and deadline. When no aligned option print exists, the fallback is a share position; when signals are mixed or weak, the recommendation is to stand aside.
+    The scan runs automatically when this tab opens and re-runs on the auto-refresh interval while it stays open.
     Data lags still apply (13F quarterly, congress up to 45d). This is a research instrument, not trade advice — judge it by its ledger, and verify filings via the links in each tab.
   </div>
 </section>
@@ -232,8 +234,9 @@
     <label>Tickers
       <input id="cg-watchlist" style="width:280px" spellcheck="false">
     </label>
-    <label>&nbsp;<button class="primary" id="cg-refresh">Fetch</button></label>
+    <label>&nbsp;<button class="primary" id="cg-refresh">Fetch trades</button></label>
   </div>
+  <div id="cg-stats" class="stats"></div>
   <div id="cg-msg"></div>
   <div class="card tablewrap"><div id="cg-table" class="loading">Enter a free Finnhub key and press Fetch. No key? Browse <a href="https://www.quiverquant.com/congresstrading/" target="_blank" rel="noopener">QuiverQuant</a> or <a href="https://unusualwhales.com/politics" target="_blank" rel="noopener">Unusual Whales politics</a> manually.</div></div>
   <div class="foot">Source: Finnhub congressional trading (STOCK Act disclosures). Politicians report ranges, not exact amounts; disclosures can lag trades by up to 45 days.</div>
@@ -725,7 +728,16 @@ async function fetchCongress(silent) {
     }));
     rows.sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
     cgState.loaded = true;
-    if (!rows.length) { $('cg-table').innerHTML = '<div class="loading">No congressional trades returned for these tickers (or none disclosed recently)</div>'; btn.disabled = false; return; }
+    if (!rows.length) { $('cg-stats').innerHTML = ''; $('cg-table').innerHTML = '<div class="loading">No congressional trades returned for these tickers (or none disclosed recently)</div>'; btn.disabled = false; return; }
+    const buys = rows.filter(r => r.isBuy).length;
+    const members = new Set(rows.map(r => r.name)).size;
+    const maxTo = rows.reduce((a, r) => Math.max(a, r.amountTo), 0);
+    $('cg-stats').innerHTML = `
+      <div class="stat"><div class="k">Disclosures</div><div class="v accent">${fmtN(rows.length)}</div></div>
+      <div class="stat"><div class="k">Buys</div><div class="v green">${fmtN(buys)}</div></div>
+      <div class="stat"><div class="k">Sells</div><div class="v red">${fmtN(rows.length - buys)}</div></div>
+      <div class="stat"><div class="k">Members</div><div class="v">${fmtN(members)}</div></div>
+      <div class="stat"><div class="k">Largest band</div><div class="v">${fmt$(maxTo)}</div></div>`;
     sortable($('cg-table'), rows.slice(0, 300), r => `
       <tr>
         <td class="l"><b>${esc(r.symbol)}</b></td>
@@ -765,6 +777,7 @@ function armAutoRefresh() {
     try {
       const active = document.querySelector('.tab.active').dataset.panel;
       if (active === 'flow') await scanFlow(true);
+      else if (active === 'conf') await window.runConfluence(true);
       else if (active === 'insider' && insState.all.length) await fetchInsiders(true);
       else if (active === 'congress' && $('cg-key').value.trim() && cgState.loaded) await fetchCongress(true);
       /* 13F tab skipped — filings are quarterly, nothing changes intraday */
@@ -773,8 +786,17 @@ function armAutoRefresh() {
 }
 $('auto-refresh').onchange = armAutoRefresh;
 armAutoRefresh();
-/* populate the page on open — no button press needed */
-window.addEventListener('load', () => setTimeout(() => scanFlow(), 250));
+/* populate the page on open — no button press needed. The confluence tab
+   triggers its own flow scan, so don't double-fetch when it's the active tab. */
+window.addEventListener('load', () => setTimeout(() => {
+  const active = document.querySelector('.tab.active').dataset.panel;
+  if (active !== 'conf') scanFlow();
+  if (active === 'insider') fetchInsiders();
+}, 250));
+/* first open of the insiders tab loads it — same no-button-press behavior */
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  if (t.dataset.panel === 'insider' && !insState.all.length && !$('ins-refresh').disabled) fetchInsiders();
+}));
 </script>
 <script>
 /* ================= CONFLUENCE ENGINE =================
@@ -989,17 +1011,22 @@ function impliedOdds(pr) {
   return {itm, beProb, be};
 }
 
-async function runConfluence() {
-  const btn = $('conf-run'); btn.disabled = true;
-  setMsg('conf-msg', ''); $('conf-stats').innerHTML = '';
+async function runConfluence(silent) {
+  const btn = $('conf-run');
+  if (btn.disabled) return; /* a scan is already in flight */
+  btn.disabled = true;
+  /* silent (auto-refresh) runs report progress in the message strip and keep
+     the existing table on screen; manual runs show progress in the table */
+  const prog = silent ? (t => setMsg('conf-msg', t, 'info')) : (t => setLoading('conf-table', t));
+  if (!silent) { setMsg('conf-msg', ''); $('conf-stats').innerHTML = ''; }
   try {
     const tickers = [...new Set($('conf-watchlist').value.toUpperCase().split(/[,\s]+/).filter(Boolean))].slice(0, 12);
     const days = +$('conf-days').value;
     const use13F = $('conf-13f').checked;
     const cgKey = $('cg-key').value.trim();
 
-    setLoading('conf-table', 'Step 1/4 — options flow…');
-    if (!flowState.rows.length) await scanFlow(true);
+    prog('Step 1/4 — options flow…');
+    if (!flowState.rows.length || silent) await scanFlow(true);
     const flowByT = {};
     for (const t of tickers) flowByT[t] = {call: 0, put: 0, prints: 0, maxVolOI: 0};
     for (const r of flowState.rows) {
@@ -1010,16 +1037,16 @@ async function runConfluence() {
 
     let f13 = null, names = null;
     if (use13F) {
-      setLoading('conf-table', 'Step 2/4 — indexing 13F holdings of 12 funds…');
+      prog('Step 2/4 — indexing 13F holdings of 12 funds…');
       names = await loadTickerNames(tickers);
-      f13 = await build13FIndex((d, t) => setLoading('conf-table', `Step 2/4 — indexing 13F holdings… fund ${d}/${t}`));
+      f13 = await build13FIndex((d, t) => prog(`Step 2/4 — indexing 13F holdings… fund ${d}/${t}`));
     }
 
     const insByT = {};
     let iDone = 0;
     await pool(tickers, async t => {
       insByT[t] = await insiderScan(t, days).catch(() => ({buyVal: 0, sellVal: 0, buyers: new Set(), sellers: new Set(), filings: 0}));
-      iDone++; setLoading('conf-table', `Step 3/4 — insider filings… ${iDone}/${tickers.length} tickers`);
+      iDone++; prog(`Step 3/4 — insider filings… ${iDone}/${tickers.length} tickers`);
     }, 3);
 
     const cgByT = {};
@@ -1027,7 +1054,7 @@ async function runConfluence() {
       let cDone = 0;
       await pool(tickers, async t => {
         cgByT[t] = await congressScan(t, days, cgKey).catch(() => null);
-        cDone++; setLoading('conf-table', `Step 4/4 — congress trades… ${cDone}/${tickers.length}`);
+        cDone++; prog(`Step 4/4 — congress trades… ${cDone}/${tickers.length}`);
       }, 4);
     }
 
@@ -1054,8 +1081,21 @@ async function runConfluence() {
           deadline: new Date(Date.now() + horizon * 864e5).toISOString().slice(0, 10)
         };
       }
+      /* recommended expression of the thesis — mirror the largest whale print
+         aligned with the verdict direction, preferring OTM (the speculative
+         side of the book). Everything below derives from that contract. */
+      let rec = null;
+      if (thesis) {
+        const want = thesis.dir > 0 ? 'C' : 'P';
+        /* prefer a print you can actually hold for the thesis: OTM with ≥1
+           week to expiry, then any OTM, then any aligned print */
+        const p = prints.find(x => x.type === want && x.otm && x.dte >= 7)
+               || prints.find(x => x.type === want && x.otm)
+               || prints.find(x => x.type === want) || null;
+        rec = p ? {print: p, odds: impliedOdds(p)} : null;
+      }
       return {ticker: t, score: sc.score, adjScore: sc.adjScore, counter: sc.counter,
-              dirLabel: label, dir: sc.dir, active: sc.active, thesis, odds, top1,
+              dirLabel: label, dir: sc.dir, active: sc.active, thesis, odds, top1, rec,
               badge: sc.active >= 3 ? 'STRONG' : sc.active >= 2 ? 'CONFLUENCE' : '',
               flow: flowByT[t], ins: insByT[t], inst, cg: cgKey ? cgByT[t] : null,
               flowS: sc.comps.flow.s, insS: sc.comps.ins.s,
@@ -1069,16 +1109,46 @@ async function runConfluence() {
       <div class="stat"><div class="k">With confluence (2+ sources)</div><div class="v ${strong ? 'green' : ''}">${strong}</div></div>
       <div class="stat"><div class="k">Top score</div><div class="v">${top ? esc(top.ticker) + ' <span class="dim" style="font-size:13px">' + top.adjScore + '/100</span>' : '—'}</div></div>
       <div class="stat"><div class="k">Coverage</div><div class="v" style="font-size:13px">Options + Insiders${f13 ? ' + 13F' : ''}${cgKey ? ' + Congress' : ''}</div></div>`;
+    if (silent) setMsg('conf-msg', ''); /* clear the progress strip */
     if (!f13 || !cgKey) setMsg('conf-msg',
       (!f13 ? '13F scan disabled — institutions excluded from scores. ' : '') +
       (!cgKey ? 'No Finnhub key — congress excluded from scores (add one in the Congress tab).' : ''), 'info');
     renderConfluence();
     resolveDue(); /* grade any theses whose deadline has passed */
   } catch (e) {
-    $('conf-table').innerHTML = '<div class="loading">—</div>';
+    if (!silent) $('conf-table').innerHTML = '<div class="loading">—</div>'; /* keep last good table on auto-refresh */
     setMsg('conf-msg', 'Scan failed: ' + esc(e.message), 'err');
   }
   btn.disabled = false;
+}
+
+/* Recommended expression of a row's verdict. Every value is derived from the
+   scan: direction from the confluence verdict, the contract from the largest
+   aligned whale print, cost/breakeven/odds from that contract's price and IV,
+   exit from the thesis invalidation and deadline. No trade is also an answer. */
+function recMove(r) {
+  if (!r.thesis) {
+    const why = r.dirLabel === 'MIXED'
+      ? 'whale sources disagree on direction'
+      : `aligned score ${r.adjScore}/100 is below the action threshold`;
+    return `<b class="dim">RECOMMENDED MOVE</b> <span class="dim">Stand aside on ${esc(r.ticker)} — ${why}. Re-check after the next scan.</span>`;
+  }
+  const bull = r.thesis.dir > 0, cls = bull ? 'green' : 'red';
+  const exit = `Exit if ${esc(r.thesis.invalidation)}, or at the ${esc(r.thesis.deadline)} verdict date, whichever comes first`;
+  const p = r.rec && r.rec.print;
+  if (!p) {
+    return `<b class="${cls}">RECOMMENDED MOVE</b> ${bull ? 'Long' : 'Short'} ${esc(r.ticker)} shares — no ${bull ? 'call' : 'put'} whale print in today's flow to mirror with options. ${exit}. <span class="dim">Research signal, not financial advice.</span>`;
+  }
+  const o = r.rec.odds;
+  const bePct = o && p.spot ? (o.be - p.spot) / p.spot * 100 : null;
+  const expiryNote = p.dte < r.thesis.horizon
+    ? ` <span class="amber">Contract expires in ${p.dte}d — before the ${r.thesis.horizon}d thesis deadline, so plan to roll or take profit early.</span>` : '';
+  return `<b class="${cls}">RECOMMENDED MOVE</b> Buy to open ${esc(r.ticker)} $${p.strike} ${p.type === 'C' ? 'CALL' : 'PUT'} exp ${esc(p.exp)} (${p.dte}d)` +
+    ` — mirrors the largest aligned whale print (${fmt$(p.notional)} traded, ${p.volOI >= 999 ? '∞' : p.volOI.toFixed(1)}× vol/OI).` +
+    ` ≈${fmt$(p.price * 100)} per contract` +
+    (o ? ` · breakeven $${o.be.toFixed(2)}${bePct != null ? ` (${bePct > 0 ? '+' : ''}${bePct.toFixed(1)}% from spot $${p.spot})` : ''}` +
+         ` · market-implied ${Math.round(o.itm * 100)}% ITM / ${Math.round(o.beProb * 100)}% past breakeven` : '') +
+    `. ${exit}.${expiryNote} <span class="dim">Research signal, not financial advice — size accordingly.</span>`;
 }
 
 function renderConfluence() {
@@ -1114,6 +1184,7 @@ function renderConfluence() {
     } else if (r.thesis) {
       detail += `<br><span class="dim">Cross-exam found no opposing evidence in available sources</span>`;
     }
+    detail += '<br>' + recMove(r);
     return `<tr>
       <td class="l"><b>${esc(r.ticker)}</b></td>
       <td><b style="font-size:15px">${r.adjScore}</b><span class="dim">/100</span>${r.counter.pts ? `<span class="amber" style="font-size:11px"> (${r.score} −${r.counter.pts.toFixed(0)})</span>` : ''}
@@ -1231,6 +1302,13 @@ function renderRecord() {
 }
 renderRecord();
 $('conf-run').onclick = () => runConfluence();
+/* auto list — first open of the tab, or page load landing on it, runs the scan */
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  if (t.dataset.panel === 'conf' && !confState.rows.length) runConfluence();
+}));
+window.addEventListener('load', () => setTimeout(() => {
+  if (document.querySelector('.tab.active').dataset.panel === 'conf' && !confState.rows.length) runConfluence();
+}, 300));
 </script>
 </body>
 </html>
